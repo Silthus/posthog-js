@@ -55,6 +55,7 @@ const DEFAULT_MAX_RETRIES = 2
 const FIRST_RETRY_DELAY_MS = 1_000
 const MAX_RETRY_DELAY_MS = 30_000
 const BASE64_CHUNK_BYTES = 0x8000
+const DOT_SEGMENTS = new Set(['.', '..'])
 
 /** What every send takes, whatever its form. */
 export interface SendEmailBase {
@@ -790,7 +791,7 @@ function apiError({ status, body }: PostHogApiResponse): EmailError {
 }
 
 function statusPath(id: unknown): string | undefined {
-  if (typeof id !== 'string' || !id) {
+  if (typeof id !== 'string' || !id || DOT_SEGMENTS.has(id)) {
     return undefined
   }
   try {

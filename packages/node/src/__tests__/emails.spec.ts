@@ -456,6 +456,8 @@ describe('emails', () => {
       ['client_disabled', 'application_error', { disabled: true }, MESSAGE_ID, 'disabled'],
       ['invalid_message_id', 'validation_error', {}, '', 'id'],
       ['invalid_message_id', 'validation_error', {}, 'message-\uD800', 'id'],
+      ['invalid_message_id', 'validation_error', {}, '.', 'id'],
+      ['invalid_message_id', 'validation_error', {}, '..', 'id'],
     ])('returns %s as %s without a request', async (code, name, clientOptions: PostHogOptions, id, says) => {
       const result = await createClient(clientOptions).emails.get(id)
 
