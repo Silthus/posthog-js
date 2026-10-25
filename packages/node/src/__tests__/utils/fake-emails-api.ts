@@ -99,7 +99,7 @@ export class FakeEmailsApi {
       return this.accept(request, { template: request.body.template_key, ...renderedContent(request.body) })
     }
     if (!this.templateIds.has(templateId)) {
-      return refusal(404, 'template_not_found', 'template__id')
+      return refusal(404, 'not_found', null)
     }
     return this.accept(request, { template: templateId, variables: request.body.message_data ?? {} })
   }
