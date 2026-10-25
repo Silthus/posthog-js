@@ -3010,6 +3010,26 @@
       "path": "../core/src/error-tracking/types.ts"
     },
     {
+      "id": "PostHogApiResponse",
+      "name": "PostHogApiResponse",
+      "properties": [
+        {
+          "type": "number",
+          "name": "status"
+        },
+        {
+          "type": "unknown",
+          "name": "body"
+        },
+        {
+          "description": "The answer's `Retry-After` in milliseconds, when it sent a usable one.",
+          "type": "number",
+          "name": "retryAfterMs"
+        }
+      ],
+      "path": "../core/src/types.ts"
+    },
+    {
       "id": "PostHogAutocaptureElement",
       "name": "PostHogAutocaptureElement",
       "properties": [
