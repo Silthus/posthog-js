@@ -9,6 +9,7 @@ const SECRET_KEY = 'phs_secret'
 const APP_HOST = 'https://posthog.example.com'
 const TEMPLATE_ID = '0190f6d2-7c1e-4b3a-9f5e-1c2d3e4f5a6b'
 const TEMPLATE_SEND = `POST /api/projects/@current/messaging_templates/${TEMPLATE_ID}/send/`
+const SEND = 'POST /api/projects/@current/messaging/send/email/'
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 describe('emails', () => {
@@ -59,7 +60,7 @@ describe('emails', () => {
         {
           messageId: 'message-1',
           to: JANE,
-          templateId: TEMPLATE_ID,
+          template: TEMPLATE_ID,
           variables: { firstName: 'Jane' },
           distinctId: 'user_42',
         },
@@ -79,11 +80,15 @@ describe('emails', () => {
     })
 
     it.each([
-      ['no template data or distinct id', { to: JANE, templateId: TEMPLATE_ID }, { to: JANE }],
       [
-        'template data and a distinct id',
-        { to: JANE, templateId: TEMPLATE_ID, templateData: { n: 1 }, distinctId: 'u' },
-        { to: JANE, message_data: { n: 1 }, identifiers: { distinct_id: 'u' } },
+        'no template data or distinct id',
+        { to: JANE, templateId: TEMPLATE_ID },
+        { to: JANE, capture_engagement: true },
+      ],
+      [
+        'template data, a distinct id and engagement capture turned off',
+        { to: JANE, templateId: TEMPLATE_ID, templateData: { n: 1 }, distinctId: 'u', captureEngagement: false },
+        { to: JANE, message_data: { n: 1 }, identifiers: { distinct_id: 'u' }, capture_engagement: false },
       ],
     ])('maps %s to the request body', async (_, options, body) => {
       await createClient().emails.send(options)
@@ -141,6 +146,94 @@ describe('emails', () => {
         error: null,
       })
       expect(warn.mock.calls.filter((call) => call.join(' ').includes('sender_unverified_soon'))).toHaveLength(1)
+    })
+  })
+
+  describe('the code form', () => {
+    it('sends inline HTML to the recipient, as the distinct id, with the secret key', async () => {
+      const result = await createClient().emails.send({
+        to: JANE,
+        distinctId: 'user_42',
+        templateKey: 'password-reset',
+        from: 'Security <security@example.com>',
+        subject: 'Reset your password',
+        html: '<p>Reset</p>',
+      })
+
+      expect(result).toEqual({ data: { id: 'message-1', warnings: [] }, error: null })
+      expect(api.delivered).toEqual([
+        {
+          messageId: 'message-1',
+          to: JANE,
+          template: 'password-reset',
+          subject: 'Reset your password',
+          html: '<p>Reset</p>',
+          distinctId: 'user_42',
+        },
+      ])
+      expect(api.received[0].headers).toEqual(
+        expect.objectContaining({
+          authorization: `Bearer ${SECRET_KEY}`,
+          'idempotency-key': expect.stringMatching(UUID_V4),
+        })
+      )
+      expect(requestLog()).toEqual([SEND])
+    })
+
+    it.each([
+      [
+        'html',
+        { templateKey: 'password-reset', subject: 'Reset your password', html: '<p>Reset</p>' },
+        {
+          template_key: 'password-reset',
+          subject: 'Reset your password',
+          html: '<p>Reset</p>',
+          capture_engagement: true,
+        },
+      ],
+      [
+        'text, a sender, one reply-to address and engagement capture turned off',
+        {
+          templateKey: 'password-reset',
+          subject: 'Reset',
+          text: 'Reset',
+          from: 'Security <security@example.com>',
+          replyTo: 'help@example.com',
+          captureEngagement: false,
+        },
+        {
+          template_key: 'password-reset',
+          subject: 'Reset',
+          text: 'Reset',
+          from: 'Security <security@example.com>',
+          reply_to: ['help@example.com'],
+          capture_engagement: false,
+        },
+      ],
+      [
+        'html, text and reply-to addresses',
+        {
+          templateKey: 'password-reset',
+          subject: 'Reset',
+          html: '<p>Reset</p>',
+          text: 'Reset',
+          replyTo: ['a@example.com', 'b@example.com'],
+        },
+        {
+          template_key: 'password-reset',
+          subject: 'Reset',
+          html: '<p>Reset</p>',
+          text: 'Reset',
+          reply_to: ['a@example.com', 'b@example.com'],
+          capture_engagement: true,
+        },
+      ],
+    ])('maps %s to the request body', async (_, content, body) => {
+      await createClient().emails.send({ to: JANE, distinctId: 'user_42', ...content })
+
+      expect(api.received.map((request) => request.body)).toEqual([
+        { ...body, to: JANE, identifiers: { distinct_id: 'user_42' } },
+      ])
     })
   })
 
@@ -241,13 +334,20 @@ describe('emails', () => {
       ['invalid_template_id', 'validation_error', {}, { templateId: '../../feature_flags' }],
       ['invalid_idempotency_key', 'validation_error', {}, { idempotencyKey: 'has spaces' }],
       ['invalid_idempotency_key', 'validation_error', {}, { idempotencyKey: 42 as unknown as string }],
+      ['invalid_form', 'validation_error', {}, { templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>' }],
+      [
+        'invalid_template_key',
+        'validation_error',
+        {},
+        { templateId: undefined, templateKey: '../welcome', subject: 'Hi', html: '<p>Hi</p>' },
+      ],
     ])('returns %s as %s without a request', async (code, name, clientOptions: PostHogOptions, sendOptions) => {
       const result = await createClient(clientOptions).emails.send({
         to: JANE,
         distinctId: 'user_42',
         templateId: TEMPLATE_ID,
         ...sendOptions,
-      })
+      } as SendEmailOptions)
 
       expect(result).toEqual({ data: null, error: expect.objectContaining({ name, code }) })
       expect(api.received).toEqual([])
@@ -269,16 +369,34 @@ describe('emails', () => {
       expect(api.received).toEqual([])
     })
 
-    it('returns invalid_form for an option it does not take, such as Resend scheduledAt, without a request', async () => {
-      const result = await createClient().emails.send({
-        to: JANE,
-        templateId: TEMPLATE_ID,
-        scheduledAt: 'in 1 hour',
-      } as SendEmailOptions)
+    it.each([
+      ['from on the template form', { templateId: TEMPLATE_ID, from: 'Acme <hi@example.com>' }, 'from'],
+      ['replyTo on the template form', { templateId: TEMPLATE_ID, replyTo: 'help@example.com' }, 'replyTo'],
+      ['subject on the template form', { templateId: TEMPLATE_ID, subject: 'Hi' }, 'subject'],
+      ['html on the template form', { templateId: TEMPLATE_ID, html: '<p>Hi</p>' }, 'html'],
+      ['text on the template form', { templateId: TEMPLATE_ID, text: 'Hi' }, 'text'],
+      ['a code send without a subject', { templateKey: 'welcome', html: '<p>Hi</p>' }, 'subject'],
+      ['a code send without html or text', { templateKey: 'welcome', subject: 'Hi' }, 'html'],
+      ['a code send with html that is not a string', { templateKey: 'welcome', subject: 'Hi', html: 1 }, 'html'],
+      [
+        'a code send with template data, which only the template form takes',
+        { templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>', templateData: { name: 'Jane' } },
+        'templateData',
+      ],
+      [
+        'Resend scheduledAt, which it does not take',
+        { templateId: TEMPLATE_ID, scheduledAt: 'in 1 hour' },
+        'scheduledAt',
+      ],
+      [
+        'Resend scheduledAt on a code send',
+        { templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>', scheduledAt: 'in 1 hour' },
+        'scheduledAt',
+      ],
+    ])('returns invalid_form for %s without a request', async (_, form, field) => {
+      const result = await createClient().emails.send({ to: JANE, ...form } as unknown as SendEmailOptions)
 
-      expect(result.error).toEqual(
-        expect.objectContaining({ name: 'validation_error', code: 'invalid_form', field: 'scheduledAt' })
-      )
+      expect(result.error).toEqual(expect.objectContaining({ name: 'validation_error', code: 'invalid_form', field }))
       expect(api.received).toEqual([])
     })
 

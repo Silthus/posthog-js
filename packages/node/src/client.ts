@@ -726,7 +726,9 @@ export abstract class PostHogBackendClient extends PostHogCoreStateless implemen
    * const { data, error } = await client.emails.send({
    *   to: 'jane@example.com',
    *   distinctId: user.id,
-   *   templateId: '0190f6d2-7c1e-4b3a-9f5e-1c2d3e4f5a6b',
+   *   templateKey: 'password-reset',
+   *   subject: 'Reset your password',
+   *   html: '<p>Reset your password</p>',
    * })
    * ```
    *

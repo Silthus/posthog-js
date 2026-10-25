@@ -1,6 +1,7 @@
 import type { PostHogFetchOptions, PostHogFetchResponse } from '@posthog/core'
 
 const TEMPLATE_SEND_PATH = /^\/api\/projects\/@current\/messaging_templates\/([^/]+)\/send\/$/
+const SEND_PATH = '/api/projects/@current/messaging/send/email/'
 const DOCS_URL = 'https://posthog.com/docs/workflows/transactional-email-api'
 
 export interface ReceivedRequest {
@@ -14,8 +15,12 @@ export interface ReceivedRequest {
 export interface DeliveredEmail {
   messageId: string
   to: string
-  templateId: string
-  variables: Record<string, unknown>
+  /** The template id, or the rendered content's `template_key`. */
+  template: string
+  subject?: string
+  html?: string
+  text?: string
+  variables?: Record<string, unknown>
   distinctId?: string
 }
 
@@ -31,8 +36,9 @@ interface ScheduledFault {
 }
 
 /**
- * An in-memory PostHog app host that speaks the template send route of the transactional email API, with its
- * idempotency rule: a key PostHog already accepted for the same request answers the first `202` again.
+ * An in-memory PostHog app host that speaks the send routes of the transactional email API: a template by id on its
+ * own route, and rendered content by `template_key` on the send route. An idempotency key PostHog already accepted for
+ * the same request answers the first `202` again.
  */
 export class FakeEmailsApi {
   readonly received: ReceivedRequest[] = []
@@ -91,15 +97,25 @@ export class FakeEmailsApi {
     if (request.method === 'POST' && templateId) {
       return this.handleTemplateSend(decodeURIComponent(templateId), request)
     }
+    if (request.method === 'POST' && request.path === SEND_PATH) {
+      return this.accept(request, { template: request.body.template_key, ...renderedContent(request.body) })
+    }
     return refusal(404, 'not_found', null)
   }
 
-  private handleTemplateSend(templateId: string, { headers, body }: ReceivedRequest): PostHogFetchResponse {
+  private handleTemplateSend(templateId: string, request: ReceivedRequest): PostHogFetchResponse {
     if (!this.templateIds.has(templateId)) {
       return refusal(404, 'not_found', null)
     }
+    return this.accept(request, { template: templateId, variables: request.body.message_data ?? {} })
+  }
+
+  private accept(
+    { path, headers, body }: ReceivedRequest,
+    content: Omit<DeliveredEmail, 'messageId' | 'to' | 'distinctId'>
+  ): PostHogFetchResponse {
     const key = headers['idempotency-key']
-    const fingerprint = JSON.stringify([templateId, body])
+    const fingerprint = JSON.stringify([path, body])
     const earlier = key === undefined ? undefined : this.accepted.get(key)
     if (earlier) {
       return earlier.fingerprint === fingerprint
@@ -110,14 +126,20 @@ export class FakeEmailsApi {
     if (key !== undefined) {
       this.accepted.set(key, { fingerprint, messageId })
     }
-    this.delivered.push({
-      messageId,
-      to: body.to,
-      templateId,
-      variables: body.message_data ?? {},
-      distinctId: body.identifiers?.distinct_id,
-    })
+    this.delivered.push({ messageId, to: body.to, ...content, distinctId: body.identifiers?.distinct_id })
     return respond(202, { message_id: messageId, replayed: false })
+  }
+}
+
+function renderedContent({
+  subject,
+  html,
+  text,
+}: Record<string, any>): Pick<DeliveredEmail, 'subject' | 'html' | 'text'> {
+  return {
+    subject,
+    ...(html !== undefined && { html }),
+    ...(text !== undefined && { text }),
   }
 }
 

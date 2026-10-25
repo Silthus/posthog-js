@@ -2,9 +2,26 @@ import { isValidUUID, type JsonType, type PostHogApiResponse } from '@posthog/co
 
 const TEMPLATE_SEND_PATH = (templateId: string): string =>
   `/api/projects/@current/messaging_templates/${templateId}/send/`
+const SEND_PATH = '/api/projects/@current/messaging/send/email/'
 
+const TEMPLATE_KEY_PATTERN = /^[a-zA-Z0-9_-]{1,400}$/
+const CODE_ONLY_FIELDS = ['from', 'replyTo', 'subject', 'html', 'text'] as const
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,255}$/
-const SEND_OPTIONS = new Set(['to', 'distinctId', 'idempotencyKey', 'maxRetries', 'templateId', 'templateData'])
+const SEND_OPTIONS = new Set([
+  'to',
+  'distinctId',
+  'idempotencyKey',
+  'captureEngagement',
+  'maxRetries',
+  'templateId',
+  'templateData',
+  'templateKey',
+  'from',
+  'replyTo',
+  'subject',
+  'html',
+  'text',
+])
 const DEFAULT_MAX_RETRIES = 2
 const FIRST_RETRY_DELAY_MS = 1_000
 const MAX_RETRY_DELAY_MS = 30_000
@@ -26,20 +43,51 @@ export interface SendEmailBase {
    * `maxRetries: 0`.
    */
   idempotencyKey?: string
+  /**
+   * Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics
+   * events of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn
+   * capture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send
+   * asks.
+   */
+  captureEngagement?: boolean
   /** How often to retry this send, a whole number from 0. Overrides the `maxRetries` client option. */
   maxRetries?: number
 }
 
 /** A template made in PostHog, sent by its id. */
-export interface SendTemplateEmailOptions extends SendEmailBase {
+export interface TemplateEmailForm {
   /** The UUID of the template. */
   templateId: string
   /** Values for the template's `{{ variables.* }}`. The template can't read person properties. */
   templateData?: Record<string, unknown>
 }
 
-/** One email to send with `posthog.emails.send()`. */
-export type SendEmailOptions = SendTemplateEmailOptions
+interface CodeEmailFields {
+  /** Names the email, such as `'password-reset'`, so its metrics, logs and status group under it in PostHog. */
+  templateKey: string
+  subject: string
+  /** A verified sender, such as `'Acme <security@acme.com>'`. Without it, the project's default sender. */
+  from?: string
+  replyTo?: string | string[]
+}
+
+/**
+ * Email content your code rendered, such as React Email output, named by a key. PostHog sends it as is and never
+ * stores it. Needs `html`, `text` or both. PostHog derives a missing `text` from the `html`, and sends HTML with no
+ * text in it, such as a single image, without a text part.
+ */
+export type CodeEmailForm = CodeEmailFields & ({ html: string; text?: string } | { html?: string; text: string })
+
+type Without<T> = { [K in keyof T]?: never }
+
+export type SendTemplateEmailOptions = SendEmailBase &
+  TemplateEmailForm &
+  Without<CodeEmailFields & { html: string; text: string }>
+
+export type SendCodeEmailOptions = SendEmailBase & CodeEmailForm & Without<TemplateEmailForm>
+
+/** One email to send with `posthog.emails.send()`, in exactly one form. */
+export type SendEmailOptions = SendTemplateEmailOptions | SendCodeEmailOptions
 
 /** Something to know about a queued email. */
 export interface EmailWarning {
@@ -59,8 +107,8 @@ export interface EmailError {
   /**
    * PostHog's error code, such as `invalid_recipient`, or one of the SDK's own: `missing_secret_key`,
    * `missing_app_host`, `client_disabled`, `client_closed`, `network_error`, `api_error` for an answer without a code,
-   * `unexpected_error`, and `invalid_form`, `invalid_template_id` and `invalid_idempotency_key` for a send the SDK
-   * refused before any request.
+   * `unexpected_error`, and `invalid_form`, `invalid_template_id`, `invalid_template_key` and
+   * `invalid_idempotency_key` for a send the SDK refused before any request.
    */
   code: string
   message: string
@@ -106,7 +154,18 @@ export interface Emails {
    * Needs the `secretKey` client option, a project secret API key (`phs_`) with the `hog_flow:write` scope. When the
    * key can't read feature flags, also set `enableLocalEvaluation: false`, or the client polls flag definitions with it.
    *
-   * @example
+   * @example Rendered content, such as React Email rendered to HTML in your app
+   * ```ts
+   * const { data, error } = await posthog.emails.send({
+   *   to: 'jane@example.com',
+   *   distinctId: user.id,
+   *   templateKey: 'password-reset',
+   *   subject: 'Reset your password',
+   *   html: await render(<PasswordReset url={url} />),
+   * })
+   * ```
+   *
+   * @example A template made in PostHog, by its id
    * ```ts
    * const { data, error } = await posthog.emails.send({
    *   to: 'jane@example.com',
@@ -155,7 +214,9 @@ export class PostHogEmails implements Emails {
 
   send(options: SendEmailOptions): Promise<SendEmailResult> {
     if (!isRecord(options)) {
-      return Promise.resolve(failure('invalid_form', 'send needs an options object with to and templateId.'))
+      return Promise.resolve(
+        failure('invalid_form', 'send needs an options object with to, and templateId or templateKey.')
+      )
     }
     const refusal = this.refusalBeforeRequest(options)
     if (refusal) {
@@ -165,7 +226,6 @@ export class PostHogEmails implements Emails {
   }
 
   private refusalBeforeRequest(options: SendEmailOptions): Failure | undefined {
-    const { templateId, idempotencyKey } = options
     if (this.api.isDisabled()) {
       return failure('client_disabled', 'The PostHog client is disabled, so nothing was sent.')
     }
@@ -185,40 +245,14 @@ export class PostHogEmails implements Emails {
           'goes to a proxy.'
       )
     }
-    if (!isValidUUID(templateId)) {
-      return failure('invalid_template_id', 'templateId must be the UUID of a template.', { field: 'templateId' })
-    }
-    const unknownOption = unknownOptionRefusal(options)
-    if (unknownOption) {
-      return unknownOption
-    }
-    if (idempotencyKey !== undefined && !isIdempotencyKey(idempotencyKey)) {
-      return failure(
-        'invalid_idempotency_key',
-        'idempotencyKey must be 1 to 255 visible ASCII characters, with no spaces.',
-        { field: 'idempotencyKey' }
-      )
-    }
-    return undefined
+    return formRefusal(options) ?? unknownOptionRefusal(options) ?? idempotencyKeyRefusal(options.idempotencyKey)
   }
 
-  private prepare({
-    to,
-    distinctId,
-    idempotencyKey,
-    maxRetries,
-    templateId,
-    templateData,
-  }: SendEmailOptions): PreparedSend {
+  private prepare(options: SendEmailOptions): PreparedSend {
     return {
-      path: TEMPLATE_SEND_PATH(templateId),
-      body: {
-        to,
-        ...(templateData !== undefined && { message_data: templateData as JsonType }),
-        ...(distinctId !== undefined && { identifiers: { distinct_id: distinctId } }),
-      },
-      idempotencyKey: idempotencyKey ?? crypto.randomUUID(),
-      maxRetries: retryCount(maxRetries) ?? retryCount(this.api.maxRetries()) ?? DEFAULT_MAX_RETRIES,
+      ...(isTemplateForm(options) ? templateSend(options) : renderedContentSend(options)),
+      idempotencyKey: options.idempotencyKey ?? crypto.randomUUID(),
+      maxRetries: retryCount(options.maxRetries) ?? retryCount(this.api.maxRetries()) ?? DEFAULT_MAX_RETRIES,
     }
   }
 
@@ -254,6 +288,108 @@ export class PostHogEmails implements Emails {
       this.api.warn(`Email ${result.data?.id} was queued with a warning, ${warning.code}: ${warning.message}`)
     }
     return result
+  }
+}
+
+function isTemplateForm(options: SendEmailOptions): options is SendTemplateEmailOptions {
+  return options.templateId !== undefined
+}
+
+function formRefusal(options: SendEmailOptions): Failure | undefined {
+  if ((options.templateId === undefined) === (options.templateKey === undefined)) {
+    return failure('invalid_form', 'Send either templateId, or templateKey with subject and html or text.')
+  }
+  if (isTemplateForm(options)) {
+    return isValidUUID(options.templateId)
+      ? codeOnlyFieldRefusal(options)
+      : failure('invalid_template_id', 'templateId must be the UUID of a template.', { field: 'templateId' })
+  }
+  if (typeof options.templateKey !== 'string' || !TEMPLATE_KEY_PATTERN.test(options.templateKey)) {
+    return failure(
+      'invalid_template_key',
+      'templateKey can only have letters, digits, hyphens (-) and underscores (_), at most 400.',
+      { field: 'templateKey' }
+    )
+  }
+  return contentRefusal(options)
+}
+
+function codeOnlyFieldRefusal(options: SendTemplateEmailOptions): Failure | undefined {
+  const field = CODE_ONLY_FIELDS.find((name) => options[name] !== undefined)
+  if (field === undefined) {
+    return undefined
+  }
+  return failure('invalid_form', `Send ${field} with templateKey. A template made in PostHog sets its own.`, { field })
+}
+
+function contentRefusal({ subject, html, text, templateData }: SendCodeEmailOptions): Failure | undefined {
+  if (typeof subject !== 'string') {
+    return failure('invalid_form', 'A send with templateKey needs a subject.', { field: 'subject' })
+  }
+  if (html !== undefined && typeof html !== 'string') {
+    return failure('invalid_form', 'html must be a string.', { field: 'html' })
+  }
+  if (text !== undefined && typeof text !== 'string') {
+    return failure('invalid_form', 'text must be a string.', { field: 'text' })
+  }
+  if (html === undefined && text === undefined) {
+    return failure('invalid_form', 'A send with templateKey needs html, text or both.', { field: 'html' })
+  }
+  if (templateData !== undefined) {
+    return failure(
+      'invalid_form',
+      'A send with templateKey sends its content as is, so it takes no templateData. Fill in the values before you ' +
+        'send, or send a template made in PostHog with templateId.',
+      { field: 'templateData' }
+    )
+  }
+  return undefined
+}
+
+function idempotencyKeyRefusal(idempotencyKey: string | undefined): Failure | undefined {
+  if (idempotencyKey === undefined || isIdempotencyKey(idempotencyKey)) {
+    return undefined
+  }
+  return failure(
+    'invalid_idempotency_key',
+    'idempotencyKey must be 1 to 255 visible ASCII characters, with no spaces.',
+    {
+      field: 'idempotencyKey',
+    }
+  )
+}
+
+function templateSend(options: SendTemplateEmailOptions): Pick<PreparedSend, 'path' | 'body'> {
+  return {
+    path: TEMPLATE_SEND_PATH(options.templateId),
+    body: {
+      ...recipientFields(options),
+      ...(options.templateData !== undefined && { message_data: options.templateData as JsonType }),
+    },
+  }
+}
+
+function renderedContentSend(options: SendCodeEmailOptions): Pick<PreparedSend, 'path' | 'body'> {
+  const { templateKey, subject, html, text, from, replyTo } = options
+  return {
+    path: SEND_PATH,
+    body: {
+      template_key: templateKey,
+      subject,
+      ...(html !== undefined && { html }),
+      ...(text !== undefined && { text }),
+      ...(from !== undefined && { from }),
+      ...(replyTo !== undefined && { reply_to: typeof replyTo === 'string' ? [replyTo] : replyTo }),
+      ...recipientFields(options),
+    },
+  }
+}
+
+function recipientFields({ to, distinctId, captureEngagement }: SendEmailBase): Record<string, JsonType> {
+  return {
+    to,
+    ...(distinctId !== undefined && { identifiers: { distinct_id: distinctId } }),
+    capture_engagement: captureEngagement ?? true,
   }
 }
 
@@ -316,6 +452,7 @@ function errorName(code: string, statusCode?: number): EmailErrorName {
       return 'service_unavailable'
     case 'invalid_form':
     case 'invalid_template_id':
+    case 'invalid_template_key':
     case 'invalid_idempotency_key':
       return 'validation_error'
   }
