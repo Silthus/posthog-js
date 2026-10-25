@@ -30,7 +30,6 @@ export type Fault =
   | { bodyBreaksOff: Error }
 
 interface ScheduledFault {
-  matches: (request: ReceivedRequest) => boolean
   fault: Fault
   remaining: number
 }
@@ -53,7 +52,7 @@ export class FakeEmailsApi {
   readonly fetch = async (url: string, init: PostHogFetchOptions): Promise<PostHogFetchResponse> => {
     const request = await describe(new Request(url, init as RequestInit))
     this.received.push(request)
-    const fault = this.takeFault(request)
+    const fault = this.takeFault()
     if (fault && 'networkError' in fault) {
       throw fault.networkError
     }
@@ -70,16 +69,12 @@ export class FakeEmailsApi {
     this.templateIds.add(id)
   }
 
-  failWhen(matches: (request: ReceivedRequest) => boolean, fault: Fault, times = Infinity): void {
-    this.faults.push({ matches, fault, remaining: times })
-  }
-
   failNext(fault: Fault, times = 1): void {
-    this.failWhen(() => true, fault, times)
+    this.faults.push({ fault, remaining: times })
   }
 
-  private takeFault(request: ReceivedRequest): Fault | undefined {
-    const scheduled = this.faults.find((candidate) => candidate.remaining > 0 && candidate.matches(request))
+  private takeFault(): Fault | undefined {
+    const scheduled = this.faults.find((candidate) => candidate.remaining > 0)
     if (scheduled) {
       scheduled.remaining--
     }
