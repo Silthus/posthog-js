@@ -31,6 +31,11 @@ const CODE_FIELDS: EveryField<CodeEmailFields & { html: string; text: string }> 
   templateData: true,
   html: true,
   text: true,
+  cc: true,
+  bcc: true,
+  headers: true,
+  tags: true,
+  attachments: true,
 }
 const TEMPLATE_FORM: SendForm = {
   name: 'templateId',
@@ -47,6 +52,7 @@ const CODE_FORM: SendForm = {
 const DEFAULT_MAX_RETRIES = 2
 const FIRST_RETRY_DELAY_MS = 1_000
 const MAX_RETRY_DELAY_MS = 30_000
+const BASE64_CHUNK_BYTES = 0x8000
 
 /** What every send takes, whatever its form. */
 export interface SendEmailBase {
@@ -93,12 +99,41 @@ interface CodeEmailFields {
   /** A verified sender, such as `'Acme <security@acme.com>'`. Without it, the project's default sender. */
   from?: string
   replyTo?: string | string[]
+  /** Bare addresses, such as `'finance@example.com'`, that get a copy. */
+  cc?: string | string[]
+  /** Bare addresses that get a copy the other recipients never see. */
+  bcc?: string | string[]
+  /** Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog sets the standard ones itself. */
+  headers?: Record<string, string>
+  /** Added to the email's engagement events as `$email_tags`. */
+  tags?: EmailTag[]
+  attachments?: EmailAttachment[]
   /**
    * Leave it out to send rendered content: the email goes out as is, and PostHog never stores it. Pass it to send a
    * local template: PostHog fills its `{{ variables.* }}`, and the SDK uploads the template when PostHog does not hold
    * its content yet.
    */
   templateData?: Record<string, unknown>
+}
+
+/** A name and value that PostHog adds to the email's engagement events. ASCII letters, numbers, `_` and `-`. */
+export type EmailTag = {
+  name: string
+  value: string
+}
+
+/** A file sent with the email. */
+export interface EmailAttachment {
+  /** The name the recipient sees, such as `'invoice.pdf'`. */
+  filename: string
+  /** The file's bytes, or its content already Base64 encoded. */
+  content: Buffer | Uint8Array | string
+  /** A MIME type, such as `'application/pdf'`. */
+  contentType?: string
+  /** Shows the file inline where the HTML has `<img src="cid:...">` with this id. */
+  contentId?: string
+  /** PostHog can't fetch a file from a path or URL: read the file and pass its `content`. */
+  path?: never
 }
 
 /**
@@ -137,8 +172,8 @@ export interface EmailError {
   /**
    * PostHog's error code, such as `invalid_recipient`, or one of the SDK's own: `missing_secret_key`,
    * `missing_app_host`, `client_disabled`, `client_closed`, `network_error`, `api_error` for an answer without a
-   * code, `unexpected_error`, and `invalid_form`, `invalid_template_id`, `invalid_template_key` and
-   * `invalid_idempotency_key` for a send the SDK refused before any request.
+   * code, `unexpected_error`, and `invalid_form`, `invalid_template_id`, `invalid_template_key`, `invalid_attachment`
+   * and `invalid_idempotency_key` for a send the SDK refused before any request.
    */
   code: string
   message: string
@@ -150,7 +185,7 @@ export interface EmailError {
   statusCode?: number
   /** A link to the docs section that explains the fix. */
   docsUrl?: string
-  /** The request field the error is about. */
+  /** The request field the error is about, such as `cc` or `attachments__0__filename`. */
   field?: string
 }
 
@@ -215,6 +250,20 @@ export interface Emails {
    *   templateId: '0190f6d2-7c1e-4b3a-9f5e-1c2d3e4f5a6b',
    *   templateData: { firstName: 'Jane' },
    *   idempotencyKey: `welcome:${user.id}`,
+   * })
+   * ```
+   *
+   * @example A copy, a tag and an attachment
+   * ```ts
+   * await posthog.emails.send({
+   *   to: 'jane@example.com',
+   *   distinctId: user.id,
+   *   templateKey: 'invoice',
+   *   subject: 'Your invoice',
+   *   html: invoiceHtml,
+   *   cc: 'finance@example.com',
+   *   tags: [{ name: 'category', value: 'billing' }],
+   *   attachments: [{ filename: 'invoice.pdf', content: await readFile('invoice.pdf') }],
    * })
    * ```
    */
@@ -316,7 +365,7 @@ export class PostHogEmails implements Emails {
     return formRefusal(options) ?? idempotencyKeyRefusal(options.idempotencyKey)
   }
 
-  private sendForm(options: SendEmailOptions, delivery: Delivery): Promise<SendEmailResult> {
+  private async sendForm(options: SendEmailOptions, delivery: Delivery): Promise<SendEmailResult> {
     if (isTemplateForm(options)) {
       return this.post(templateBody(options), delivery)
     }
@@ -406,7 +455,9 @@ function formRefusal(options: SendEmailOptions): Failure | undefined {
       { field: 'templateKey' }
     )
   }
-  return fieldRefusal(options, CODE_FORM, TEMPLATE_FORM) ?? contentRefusal(options)
+  return (
+    fieldRefusal(options, CODE_FORM, TEMPLATE_FORM) ?? contentRefusal(options) ?? attachmentRefusal(options.attachments)
+  )
 }
 
 function fieldRefusal(options: SendEmailOptions, form: SendForm, otherForm: SendForm): Failure | undefined {
@@ -441,6 +492,27 @@ function contentRefusal({ subject, html, text }: SendCodeEmailOptions): Failure 
   return undefined
 }
 
+function attachmentRefusal(attachments: EmailAttachment[] | undefined): Failure | undefined {
+  if (attachments !== undefined && !Array.isArray(attachments)) {
+    return failure('invalid_attachment', 'attachments must be a list of files.', { field: 'attachments' })
+  }
+  for (const [index, attachment] of (attachments ?? []).entries()) {
+    if (attachment?.path !== undefined) {
+      return failure(
+        'invalid_attachment',
+        "PostHog can't fetch an attachment from a path or URL. Read the file and pass its content instead.",
+        { field: `attachments__${index}__path` }
+      )
+    }
+    if (typeof attachment?.content !== 'string' && !(attachment?.content instanceof Uint8Array)) {
+      return failure('invalid_attachment', 'An attachment needs content: a Buffer, a Uint8Array or a Base64 string.', {
+        field: `attachments__${index}__content`,
+      })
+    }
+  }
+  return undefined
+}
+
 function idempotencyKeyRefusal(idempotencyKey: string | undefined): Failure | undefined {
   if (idempotencyKey === undefined || isIdempotencyKey(idempotencyKey)) {
     return undefined
@@ -468,7 +540,7 @@ function renderedContentBody(options: SendCodeEmailOptions): JsonType {
     subject: options.subject,
     ...definedFields({ html: options.html, text: options.text }),
     ...recipientFields(options),
-    ...senderFields(options),
+    ...codeFormFields(options),
   }
 }
 
@@ -476,7 +548,7 @@ function localTemplateFields(options: SendCodeEmailOptions): Record<string, Json
   return {
     ...recipientFields(options),
     ...templateDataField(options.templateData),
-    ...senderFields(options),
+    ...codeFormFields(options),
   }
 }
 
@@ -492,11 +564,37 @@ function recipientFields({ to, distinctId, captureEngagement }: SendEmailBase): 
   }
 }
 
-function senderFields({ from, replyTo }: SendCodeEmailOptions): Record<string, JsonType> {
+function codeFormFields(options: SendCodeEmailOptions): Record<string, JsonType> {
+  const { from, replyTo, cc, bcc, headers, tags, attachments } = options
   return {
     ...(from !== undefined && { from }),
-    ...(replyTo !== undefined && { reply_to: typeof replyTo === 'string' ? [replyTo] : replyTo }),
+    ...(replyTo !== undefined && { reply_to: addressList(replyTo) }),
+    ...(cc !== undefined && { cc: addressList(cc) }),
+    ...(bcc !== undefined && { bcc: addressList(bcc) }),
+    ...(headers !== undefined && { headers }),
+    ...(tags !== undefined && { tags }),
+    ...(attachments !== undefined && { attachments: attachments.map(attachmentFields) }),
   }
+}
+
+function addressList(addresses: string | string[]): string[] {
+  return typeof addresses === 'string' ? [addresses] : addresses
+}
+
+function attachmentFields({ filename, content, contentType, contentId }: EmailAttachment): Record<string, string> {
+  return {
+    filename,
+    content: typeof content === 'string' ? content : base64Of(content),
+    ...definedFields({ content_type: contentType, content_id: contentId }),
+  }
+}
+
+function base64Of(bytes: Uint8Array): string {
+  const chunks: string[] = []
+  for (let start = 0; start < bytes.length; start += BASE64_CHUNK_BYTES) {
+    chunks.push(String.fromCharCode(...bytes.subarray(start, start + BASE64_CHUNK_BYTES)))
+  }
+  return btoa(chunks.join(''))
 }
 
 function templateDataField(templateData: Record<string, unknown> | undefined): Record<string, JsonType> {
@@ -562,6 +660,7 @@ function errorName(code: string, statusCode?: number): EmailErrorName {
     case 'invalid_form':
     case 'invalid_template_id':
     case 'invalid_template_key':
+    case 'invalid_attachment':
     case 'invalid_idempotency_key':
       return 'validation_error'
   }

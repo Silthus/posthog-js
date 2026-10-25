@@ -160,6 +160,32 @@ describe('emails', () => {
     const welcome = { templateKey: 'welcome', subject: 'Welcome, {{ variables.name }}', html: '<p>Hi</p>' }
     const sendLocalWelcome = (posthog: PostHog, content: Partial<typeof welcome> = {}) =>
       posthog.emails.send({ to: JANE, distinctId: 'user_42', ...welcome, ...content, templateData: { name: 'Jane' } })
+    const receipt = { templateKey: 'receipt', subject: 'Your receipt', html: '<p>Thanks</p>' }
+    const report = Buffer.alloc(40_000, 'report')
+    const extras = {
+      cc: 'finance@example.com',
+      bcc: ['audit@example.com', 'archive@example.com'],
+      headers: { 'X-Entity-Ref-ID': 'order-123' },
+      tags: [{ name: 'category', value: 'receipt' }],
+      attachments: [
+        { filename: 'receipt.txt', content: Buffer.from('hello') },
+        { filename: 'logo.png', content: new Uint8Array([0, 255, 1]), contentType: 'image/png', contentId: 'logo' },
+        { filename: 'invite.ics', content: 'QkVHSU46VkNBTEVOREFS', contentType: 'text/calendar' },
+        { filename: 'report.txt', content: report },
+      ],
+    }
+    const extrasOnTheWire = {
+      cc: ['finance@example.com'],
+      bcc: ['audit@example.com', 'archive@example.com'],
+      headers: { 'X-Entity-Ref-ID': 'order-123' },
+      tags: [{ name: 'category', value: 'receipt' }],
+      attachments: [
+        { filename: 'receipt.txt', content: 'aGVsbG8=' },
+        { filename: 'logo.png', content: 'AP8B', content_type: 'image/png', content_id: 'logo' },
+        { filename: 'invite.ics', content: 'QkVHSU46VkNBTEVOREFS', content_type: 'text/calendar' },
+        { filename: 'report.txt', content: report.toString('base64') },
+      ],
+    }
 
     it('sends inline HTML to the recipient, as the distinct id, with the secret key', async () => {
       const result = await createClient().emails.send({
@@ -239,6 +265,17 @@ describe('emails', () => {
           capture_engagement: true,
         },
       ],
+      [
+        'copies, headers, tags and attachments',
+        { ...receipt, ...extras },
+        {
+          template_key: 'receipt',
+          subject: 'Your receipt',
+          html: '<p>Thanks</p>',
+          ...extrasOnTheWire,
+          capture_engagement: true,
+        },
+      ],
     ])('maps %s to the request body', async (_, content, body) => {
       await createClient().emails.send({ to: JANE, distinctId: 'user_42', ...content })
 
@@ -272,6 +309,23 @@ describe('emails', () => {
       expect(secondSend.headers['idempotency-key']).toBe(firstSend.headers['idempotency-key'])
       expect(api.delivered).toEqual([
         expect.objectContaining({ template: 'welcome', subject: welcome.subject, variables: { name: 'Jane' } }),
+      ])
+    })
+
+    it('sends copies, headers, tags and attachments with both sends of a local template, and never uploads them', async () => {
+      const result = await createClient().emails.send({ to: JANE, ...receipt, ...extras, templateData: { total: 42 } })
+
+      expect(result.error).toBeNull()
+      expect(requestLog()).toEqual([SEND, 'PUT /api/projects/@current/messaging_templates/by_key/receipt/', SEND])
+      const [firstSend, upload, secondSend] = api.received
+      expect(firstSend.body).toEqual(expect.objectContaining(extrasOnTheWire))
+      expect(secondSend.body).toEqual(firstSend.body)
+      expect(Object.keys(upload.body).sort()).toEqual([
+        'html',
+        'if_code_managed',
+        'if_not_superseded',
+        'name',
+        'subject',
       ])
     })
 
@@ -330,6 +384,7 @@ describe('emails', () => {
     it.each([
       [400, 'invalid_recipient', 'validation_error'],
       [400, 'transactional_email_paused', 'validation_error'],
+      [400, 'invalid_request', 'validation_error'],
       [400, 'invalid_idempotency_key', 'validation_error'],
       [401, 'authentication_failed', 'missing_api_key'],
       [403, 'permission_denied', 'invalid_permission'],
@@ -430,6 +485,30 @@ describe('emails', () => {
         {},
         { templateId: undefined, templateKey: '../welcome', subject: 'Hi', html: '<p>Hi</p>' },
       ],
+      [
+        'invalid_attachment',
+        'validation_error',
+        {},
+        {
+          templateId: undefined,
+          templateKey: 'invoice',
+          subject: 'Hi',
+          html: '<p>Hi</p>',
+          attachments: [{ filename: 'invoice.pdf', content: 42 }],
+        },
+      ],
+      [
+        'invalid_attachment',
+        'validation_error',
+        {},
+        {
+          templateId: undefined,
+          templateKey: 'invoice',
+          subject: 'Hi',
+          html: '<p>Hi</p>',
+          attachments: { filename: 'invoice.pdf', content: 'aW52b2ljZQ==' },
+        },
+      ],
     ])('returns %s as %s without a request', async (code, name, clientOptions: PostHogOptions, sendOptions) => {
       const result = await createClient(clientOptions).emails.send({
         to: JANE,
@@ -464,6 +543,15 @@ describe('emails', () => {
       ['subject on the template form', { templateId: TEMPLATE_ID, subject: 'Hi' }, 'subject'],
       ['html on the template form', { templateId: TEMPLATE_ID, html: '<p>Hi</p>' }, 'html'],
       ['text on the template form', { templateId: TEMPLATE_ID, text: 'Hi' }, 'text'],
+      ['cc on the template form', { templateId: TEMPLATE_ID, cc: 'finance@example.com' }, 'cc'],
+      ['bcc on the template form', { templateId: TEMPLATE_ID, bcc: ['audit@example.com'] }, 'bcc'],
+      ['headers on the template form', { templateId: TEMPLATE_ID, headers: { 'X-Entity-Ref-ID': '42' } }, 'headers'],
+      ['tags on the template form', { templateId: TEMPLATE_ID, tags: [{ name: 'kind', value: 'invoice' }] }, 'tags'],
+      [
+        'attachments on the template form',
+        { templateId: TEMPLATE_ID, attachments: [{ filename: 'a.txt', content: 'YQ==' }] },
+        'attachments',
+      ],
       ['a code send without a subject', { templateKey: 'welcome', html: '<p>Hi</p>' }, 'subject'],
       ['a code send without html or text', { templateKey: 'welcome', subject: 'Hi' }, 'html'],
       ['a code send with html that is not a string', { templateKey: 'welcome', subject: 'Hi', html: 1 }, 'html'],
@@ -528,6 +616,28 @@ describe('emails', () => {
           fix: 'Remove from, or send content from your code with templateKey.',
         })
       )
+    })
+
+    it("refuses a Resend attachment path, which PostHog can't fetch, without a request", async () => {
+      const resendAttachment = { filename: 'invoice.pdf', path: 'https://example.com/invoice.pdf' }
+
+      const result = await createClient().emails.send({
+        to: JANE,
+        templateKey: 'invoice',
+        subject: 'Your invoice',
+        html: '<p>Attached</p>',
+        attachments: [{ filename: 'terms.txt', content: 'dGVybXM=' }, resendAttachment],
+      } as SendEmailOptions)
+
+      expect(result.error).toEqual(
+        expect.objectContaining({
+          name: 'validation_error',
+          code: 'invalid_attachment',
+          field: 'attachments__1__path',
+          message: expect.stringContaining('content'),
+        })
+      )
+      expect(api.received).toEqual([])
     })
 
     it('returns unexpected_error when the template data cannot be encoded', async () => {
