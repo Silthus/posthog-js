@@ -47,7 +47,8 @@ export interface SendEmailBase {
    * Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics
    * events of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn
    * capture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send
-   * asks.
+   * asks. A template sent by `templateId` still follows the project's setting, until PostHog sends it on the same route
+   * as code content.
    */
   captureEngagement?: boolean
   /** How often to retry this send, a whole number from 0. Overrides the `maxRetries` client option. */
