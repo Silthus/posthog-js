@@ -4347,7 +4347,7 @@
       "name": "SendEmailBase",
       "properties": [
         {
-          "description": "Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics events of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn capture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template sent by `templateId` still follows the project's setting, until PostHog sends it on the same route as code content.",
+          "description": "Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics events of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn capture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send asks.",
           "type": "boolean",
           "name": "captureEngagement"
         },
@@ -4445,7 +4445,7 @@
           "name": "idempotencyKey"
         },
         {
-          "description": "Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics\nevents of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn\ncapture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send\nasks. A template sent by `templateId` still follows the project's setting, until PostHog sends it on the same route\nas code content.",
+          "description": "Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics\nevents of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn\ncapture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send\nasks.",
           "type": "boolean",
           "name": "captureEngagement"
         },
