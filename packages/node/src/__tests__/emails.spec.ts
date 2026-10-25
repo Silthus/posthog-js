@@ -9,6 +9,8 @@ const SECRET_KEY = 'phs_secret'
 const APP_HOST = 'https://posthog.example.com'
 const TEMPLATE_ID = '0190f6d2-7c1e-4b3a-9f5e-1c2d3e4f5a6b'
 const SEND = 'POST /api/projects/@current/messaging/send/email/'
+const UPLOAD_WELCOME = 'PUT /api/projects/@current/messaging_templates/by_key/welcome/'
+const WELCOME_HASH = 'v1:e78af62206b6fdc0bd87d56d2a70555a9bb8d4a37617dcbb8a746f86f7db7a63'
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 describe('emails', () => {
@@ -155,6 +157,10 @@ describe('emails', () => {
   })
 
   describe('the code form', () => {
+    const welcome = { templateKey: 'welcome', subject: 'Welcome, {{ variables.name }}', html: '<p>Hi</p>' }
+    const sendLocalWelcome = (posthog: PostHog, content: Partial<typeof welcome> = {}) =>
+      posthog.emails.send({ to: JANE, distinctId: 'user_42', ...welcome, ...content, templateData: { name: 'Jane' } })
+
     it('sends inline HTML to the recipient, as the distinct id, with the secret key', async () => {
       const result = await createClient().emails.send({
         to: JANE,
@@ -239,6 +245,84 @@ describe('emails', () => {
       expect(api.received.map((request) => request.body)).toEqual([
         { ...body, to: JANE, identifiers: { distinct_id: 'user_42' } },
       ])
+    })
+
+    it('uploads a local template PostHog does not hold, then sends it again with the same idempotency key', async () => {
+      const result = await sendLocalWelcome(createClient({ migratedFrom: 'resend' }))
+
+      expect(result).toEqual({ data: { id: 'message-1', warnings: [] }, error: null })
+      expect(requestLog()).toEqual([SEND, UPLOAD_WELCOME, SEND])
+      const [firstSend, upload, secondSend] = api.received
+      expect(firstSend.body).toEqual({
+        template: { key: 'welcome', hash: WELCOME_HASH },
+        to: JANE,
+        message_data: { name: 'Jane' },
+        identifiers: { distinct_id: 'user_42' },
+        capture_engagement: true,
+      })
+      expect(upload.body).toEqual({
+        name: 'welcome',
+        subject: welcome.subject,
+        html: welcome.html,
+        if_code_managed: true,
+        if_not_superseded: true,
+      })
+      expect(upload.headers).toEqual(expect.objectContaining({ 'x-posthog-migrated-from': 'resend' }))
+      expect(secondSend.body).toEqual(firstSend.body)
+      expect(secondSend.headers['idempotency-key']).toBe(firstSend.headers['idempotency-key'])
+      expect(api.delivered).toEqual([
+        expect.objectContaining({ template: 'welcome', subject: welcome.subject, variables: { name: 'Jane' } }),
+      ])
+    })
+
+    it('sends a local template PostHog holds in one request, and uploads it again once it changes', async () => {
+      const posthog = createClient()
+      await sendLocalWelcome(posthog)
+      api.received.length = 0
+
+      await sendLocalWelcome(posthog)
+      expect(requestLog()).toEqual([SEND])
+
+      await sendLocalWelcome(posthog, { html: '<p>Hi again</p>' })
+      expect(requestLog()).toEqual([SEND, SEND, UPLOAD_WELCOME, SEND])
+      expect(api.localTemplate('welcome')?.html).toBe('<p>Hi again</p>')
+    })
+
+    it('sends a local template with the recipient and data it was called with, even when the caller reuses them', async () => {
+      const posthog = createClient()
+      const options = { to: JANE, ...welcome, templateData: { name: 'Jane' } }
+
+      const toJane = posthog.emails.send(options)
+      options.to = 'bob@example.com'
+      options.templateData.name = 'Bob'
+      const toBob = posthog.emails.send(options)
+      await Promise.all([toJane, toBob])
+
+      expect(api.delivered.map(({ to, variables }) => [to, variables]).sort()).toEqual([
+        ['bob@example.com', { name: 'Bob' }],
+        [JANE, { name: 'Jane' }],
+      ])
+    })
+
+    it('returns the refusal of a key edited in PostHog, and sends nothing', async () => {
+      api.editInPostHog('welcome', { subject: 'Edited', html: '<p>Edited</p>' })
+
+      const result = await sendLocalWelcome(createClient())
+
+      expect(result.error).toEqual(
+        expect.objectContaining({ name: 'validation_error', code: 'template_edited_in_posthog', statusCode: 409 })
+      )
+      expect(requestLog()).toEqual([SEND, UPLOAD_WELCOME])
+      expect(api.delivered).toEqual([])
+    })
+
+    it('returns a second template_outdated instead of uploading again', async () => {
+      api.failWhen(({ method }) => method === 'POST', { status: 409, body: refusalBody('template_outdated', null) })
+
+      const result = await sendLocalWelcome(createClient())
+
+      expect(result.error).toEqual(expect.objectContaining({ code: 'template_outdated' }))
+      expect(requestLog()).toEqual([SEND, UPLOAD_WELCOME, SEND])
     })
   })
 
@@ -384,11 +468,6 @@ describe('emails', () => {
       ['a code send without html or text', { templateKey: 'welcome', subject: 'Hi' }, 'html'],
       ['a code send with html that is not a string', { templateKey: 'welcome', subject: 'Hi', html: 1 }, 'html'],
       [
-        'a code send with template data, which only the template form takes',
-        { templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>', templateData: { name: 'Jane' } },
-        'templateData',
-      ],
-      [
         'Resend scheduledAt, which it does not take',
         { templateId: TEMPLATE_ID, scheduledAt: 'in 1 hour' },
         'scheduledAt',
@@ -435,23 +514,20 @@ describe('emails', () => {
       expect(requestLog()).toEqual([SEND])
     })
 
-    it.each([
-      [
-        'a sender on the template form',
-        { templateId: TEMPLATE_ID, from: 'Acme <hi@example.com>' },
-        'A template made in PostHog sets its own sender, subject and content.',
-        'Remove from, or send content from your code with templateKey.',
-      ],
-      [
-        'template data on a code send',
-        { templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>', templateData: { name: 'Jane' } },
-        'A send with templateKey takes its content from your code.',
-        'Remove templateData, or send a template made in PostHog with templateId.',
-      ],
-    ])('explains why it refuses %s and how to send it', async (_, form, why, fix) => {
-      const result = await createClient().emails.send({ to: JANE, ...form } as unknown as SendEmailOptions)
+    it('explains why it refuses a sender on the template form and how to send it', async () => {
+      const result = await createClient().emails.send({
+        to: JANE,
+        templateId: TEMPLATE_ID,
+        from: 'Acme <hi@example.com>',
+      } as unknown as SendEmailOptions)
 
-      expect(result.error).toEqual(expect.objectContaining({ code: 'invalid_form', why, fix }))
+      expect(result.error).toEqual(
+        expect.objectContaining({
+          code: 'invalid_form',
+          why: 'A template made in PostHog sets its own sender, subject and content.',
+          fix: 'Remove from, or send content from your code with templateKey.',
+        })
+      )
     })
 
     it('returns unexpected_error when the template data cannot be encoded', async () => {
