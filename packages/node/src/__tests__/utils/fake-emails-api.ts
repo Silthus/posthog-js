@@ -1,6 +1,5 @@
 import type { PostHogFetchOptions, PostHogFetchResponse } from '@posthog/core'
 
-const TEMPLATE_SEND_PATH = /^\/api\/projects\/@current\/messaging_templates\/([^/]+)\/send\/$/
 const SEND_PATH = '/api/projects/@current/messaging/send/email/'
 const DOCS_URL = 'https://posthog.com/docs/workflows/transactional-email-api'
 
@@ -35,9 +34,9 @@ interface ScheduledFault {
 }
 
 /**
- * An in-memory PostHog app host that speaks the send routes of the transactional email API: a template by id on its
- * own route, and rendered content by `template_key` on the send route. An idempotency key PostHog already accepted for
- * the same request answers the first `202` again.
+ * An in-memory PostHog app host that speaks the send route of the transactional email API: a template by id, and
+ * rendered content by `template_key`. An idempotency key PostHog already accepted for the same request answers the
+ * first `202` again.
  */
 export class FakeEmailsApi {
   readonly received: ReceivedRequest[] = []
@@ -88,19 +87,19 @@ export class FakeEmailsApi {
     if (request.headers.authorization !== `Bearer ${this.options.secretKey}`) {
       return refusal(401, 'authentication_failed', null)
     }
-    const templateId = TEMPLATE_SEND_PATH.exec(request.path)?.[1]
-    if (request.method === 'POST' && templateId) {
-      return this.handleTemplateSend(decodeURIComponent(templateId), request)
-    }
     if (request.method === 'POST' && request.path === SEND_PATH) {
-      return this.accept(request, { template: request.body.template_key, ...renderedContent(request.body) })
+      return this.handleSend(request)
     }
     return refusal(404, 'not_found', null)
   }
 
-  private handleTemplateSend(templateId: string, request: ReceivedRequest): PostHogFetchResponse {
+  private handleSend(request: ReceivedRequest): PostHogFetchResponse {
+    const templateId = request.body.template?.id
+    if (templateId === undefined) {
+      return this.accept(request, { template: request.body.template_key, ...renderedContent(request.body) })
+    }
     if (!this.templateIds.has(templateId)) {
-      return refusal(404, 'not_found', null)
+      return refusal(404, 'template_not_found', 'template__id')
     }
     return this.accept(request, { template: templateId, variables: request.body.message_data ?? {} })
   }

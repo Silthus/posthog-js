@@ -8,7 +8,6 @@ const JANE = 'jane@example.com'
 const SECRET_KEY = 'phs_secret'
 const APP_HOST = 'https://posthog.example.com'
 const TEMPLATE_ID = '0190f6d2-7c1e-4b3a-9f5e-1c2d3e4f5a6b'
-const TEMPLATE_SEND = `POST /api/projects/@current/messaging_templates/${TEMPLATE_ID}/send/`
 const SEND = 'POST /api/projects/@current/messaging/send/email/'
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
@@ -76,19 +75,25 @@ describe('emails', () => {
           }),
         }),
       ])
-      expect(requestLog()).toEqual([TEMPLATE_SEND])
+      expect(requestLog()).toEqual([SEND])
     })
 
     it.each([
       [
         'no template data or distinct id',
         { to: JANE, templateId: TEMPLATE_ID },
-        { to: JANE, capture_engagement: true },
+        { template: { id: TEMPLATE_ID }, to: JANE, capture_engagement: true },
       ],
       [
         'template data, a distinct id and engagement capture turned off',
         { to: JANE, templateId: TEMPLATE_ID, templateData: { n: 1 }, distinctId: 'u', captureEngagement: false },
-        { to: JANE, message_data: { n: 1 }, identifiers: { distinct_id: 'u' }, capture_engagement: false },
+        {
+          template: { id: TEMPLATE_ID },
+          to: JANE,
+          message_data: { n: 1 },
+          identifiers: { distinct_id: 'u' },
+          capture_engagement: false,
+        },
       ],
     ])('maps %s to the request body', async (_, options, body) => {
       await createClient().emails.send(options)

@@ -1,7 +1,5 @@
 import { isValidUUID, type JsonType, type PostHogApiResponse } from '@posthog/core'
 
-const TEMPLATE_SEND_PATH = (templateId: string): string =>
-  `/api/projects/@current/messaging_templates/${templateId}/send/`
 const SEND_PATH = '/api/projects/@current/messaging/send/email/'
 
 interface SendForm {
@@ -69,8 +67,7 @@ export interface SendEmailBase {
    * Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked, bounced) as analytics
    * events of the recipient. They count as analytics events. Defaults to `true` on every form; pass `false` to turn
    * capture off for this send. A project whose admin turned engagement capture off captures nothing, whatever the send
-   * asks. A template sent by `templateId` still follows the project's setting, until PostHog sends it on the same route
-   * as code content.
+   * asks.
    */
   captureEngagement?: boolean
   /** How often to retry this send, a whole number from 0. Overrides the `maxRetries` client option. */
@@ -220,7 +217,6 @@ export interface EmailsApi {
 type Failure = { data: null; error: EmailError }
 
 interface PreparedSend {
-  path: string
   body: JsonType
   idempotencyKey: string
   maxRetries: number
@@ -281,7 +277,7 @@ export class PostHogEmails implements Emails {
 
   private prepare(options: SendEmailOptions): PreparedSend {
     return {
-      ...(isTemplateForm(options) ? templateSend(options) : renderedContentSend(options)),
+      body: isTemplateForm(options) ? templateBody(options) : renderedContentBody(options),
       idempotencyKey: options.idempotencyKey ?? crypto.randomUUID(),
       maxRetries: retryCount(options.maxRetries) ?? retryCount(this.api.maxRetries()) ?? DEFAULT_MAX_RETRIES,
     }
@@ -307,7 +303,7 @@ export class PostHogEmails implements Emails {
     }
     let response: PostHogApiResponse
     try {
-      response = await this.api.request(`${this.api.appHost()}${send.path}`, headers, body)
+      response = await this.api.request(`${this.api.appHost()}${SEND_PATH}`, headers, body)
     } catch (error) {
       return { result: failure('network_error', error instanceof Error ? error.message : 'Request failed') }
     }
@@ -390,29 +386,24 @@ function idempotencyKeyRefusal(idempotencyKey: string | undefined): Failure | un
   )
 }
 
-function templateSend(options: SendTemplateEmailOptions): Pick<PreparedSend, 'path' | 'body'> {
+function templateBody(options: SendTemplateEmailOptions): JsonType {
   return {
-    path: TEMPLATE_SEND_PATH(options.templateId),
-    body: {
-      ...recipientFields(options),
-      ...(options.templateData !== undefined && { message_data: options.templateData as JsonType }),
-    },
+    template: { id: options.templateId },
+    ...recipientFields(options),
+    ...(options.templateData !== undefined && { message_data: options.templateData as JsonType }),
   }
 }
 
-function renderedContentSend(options: SendCodeEmailOptions): Pick<PreparedSend, 'path' | 'body'> {
+function renderedContentBody(options: SendCodeEmailOptions): JsonType {
   const { templateKey, subject, html, text, from, replyTo } = options
   return {
-    path: SEND_PATH,
-    body: {
-      template_key: templateKey,
-      subject,
-      ...(html !== undefined && { html }),
-      ...(text !== undefined && { text }),
-      ...(from !== undefined && { from }),
-      ...(replyTo !== undefined && { reply_to: typeof replyTo === 'string' ? [replyTo] : replyTo }),
-      ...recipientFields(options),
-    },
+    template_key: templateKey,
+    subject,
+    ...(html !== undefined && { html }),
+    ...(text !== undefined && { text }),
+    ...(from !== undefined && { from }),
+    ...(replyTo !== undefined && { reply_to: typeof replyTo === 'string' ? [replyTo] : replyTo }),
+    ...recipientFields(options),
   }
 }
 
