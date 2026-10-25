@@ -432,7 +432,7 @@ describe('emails', () => {
       const result = await send({ to: JANE, templateId: TEMPLATE_ID }, undefined)
 
       expect(result).toEqual({ data: { id: 'message-1', warnings: [] }, error: null })
-      expect(requestLog()).toEqual([TEMPLATE_SEND])
+      expect(requestLog()).toEqual([SEND])
     })
 
     it.each([
