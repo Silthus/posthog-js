@@ -7,18 +7,41 @@ const SEND_PATH = '/api/projects/@current/messaging/send/email/'
 interface SendForm {
   name: 'templateId' | 'templateKey'
   fields: ReadonlySet<string>
+  why: string
+  howToSend: string
 }
+
+type EveryField<Form> = Record<keyof Form, true>
 
 const TEMPLATE_KEY_PATTERN = /^[a-zA-Z0-9_-]{1,400}$/
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,255}$/
-const SHARED_FIELDS = ['to', 'distinctId', 'idempotencyKey', 'captureEngagement', 'maxRetries']
+const SHARED_FIELDS: EveryField<SendEmailBase> = {
+  to: true,
+  distinctId: true,
+  idempotencyKey: true,
+  captureEngagement: true,
+  maxRetries: true,
+}
+const TEMPLATE_FIELDS: EveryField<TemplateEmailForm> = { templateId: true, templateData: true }
+const CODE_FIELDS: EveryField<CodeEmailFields & { html: string; text: string }> = {
+  templateKey: true,
+  subject: true,
+  from: true,
+  replyTo: true,
+  html: true,
+  text: true,
+}
 const TEMPLATE_FORM: SendForm = {
   name: 'templateId',
-  fields: new Set([...SHARED_FIELDS, 'templateId', 'templateData']),
+  fields: fieldSet(SHARED_FIELDS, TEMPLATE_FIELDS),
+  why: 'A template made in PostHog sets its own sender, subject and content.',
+  howToSend: 'send a template made in PostHog with templateId',
 }
 const CODE_FORM: SendForm = {
   name: 'templateKey',
-  fields: new Set([...SHARED_FIELDS, 'templateKey', 'from', 'replyTo', 'subject', 'html', 'text']),
+  fields: fieldSet(SHARED_FIELDS, CODE_FIELDS),
+  why: 'A send with templateKey takes its content from your code.',
+  howToSend: 'send content from your code with templateKey',
 }
 const DEFAULT_MAX_RETRIES = 2
 const FIRST_RETRY_DELAY_MS = 1_000
@@ -217,7 +240,7 @@ export class PostHogEmails implements Emails {
         failure('invalid_form', 'send needs an options object with to, and templateId or templateKey.')
       )
     }
-    if (unexpected.length > 0) {
+    if (unexpected.some((argument) => argument !== undefined)) {
       return Promise.resolve(
         failure(
           'invalid_form',
@@ -326,10 +349,15 @@ function fieldRefusal(options: SendEmailOptions, form: SendForm, otherForm: Send
   if (field === undefined) {
     return undefined
   }
-  const fix = otherForm.fields.has(field) ? `Send ${field} with ${otherForm.name}.` : `Remove ${field} and send again.`
-  return failure('invalid_form', `A send with ${form.name} doesn't take ${field}, so it sent nothing. ${fix}`, {
-    field,
-  })
+  const message = `A send with ${form.name} doesn't take ${field}, so it sent nothing.`
+  if (!otherForm.fields.has(field)) {
+    return failure('invalid_form', message, { field, fix: `Remove ${field} and send again.` })
+  }
+  return failure('invalid_form', message, { field, why: form.why, fix: `Remove ${field}, or ${otherForm.howToSend}.` })
+}
+
+function fieldSet(...groups: object[]): ReadonlySet<string> {
+  return new Set(groups.flatMap((group) => Object.keys(group)))
 }
 
 function contentRefusal({ subject, html, text }: SendCodeEmailOptions): Failure | undefined {

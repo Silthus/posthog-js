@@ -420,6 +420,35 @@ describe('emails', () => {
       expect(api.received).toEqual([])
     })
 
+    it('sends when a wrapper passes undefined as a second argument', async () => {
+      const { emails } = createClient()
+      const send = emails.send.bind(emails) as (...args: unknown[]) => Promise<SendEmailResult>
+
+      const result = await send({ to: JANE, templateId: TEMPLATE_ID }, undefined)
+
+      expect(result).toEqual({ data: { id: 'message-1', warnings: [] }, error: null })
+      expect(requestLog()).toEqual([TEMPLATE_SEND])
+    })
+
+    it.each([
+      [
+        'a sender on the template form',
+        { templateId: TEMPLATE_ID, from: 'Acme <hi@example.com>' },
+        'A template made in PostHog sets its own sender, subject and content.',
+        'Remove from, or send content from your code with templateKey.',
+      ],
+      [
+        'template data on a code send',
+        { templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>', templateData: { name: 'Jane' } },
+        'A send with templateKey takes its content from your code.',
+        'Remove templateData, or send a template made in PostHog with templateId.',
+      ],
+    ])('explains why it refuses %s and how to send it', async (_, form, why, fix) => {
+      const result = await createClient().emails.send({ to: JANE, ...form } as unknown as SendEmailOptions)
+
+      expect(result.error).toEqual(expect.objectContaining({ code: 'invalid_form', why, fix }))
+    })
+
     it('returns unexpected_error when the template data cannot be encoded', async () => {
       const result = await createClient().emails.send({
         to: JANE,
