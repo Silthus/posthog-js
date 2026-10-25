@@ -743,7 +743,6 @@ export abstract class PostHogBackendClient extends PostHogCoreStateless implemen
       maxRetries: () => this.options.maxRetries,
       headers: () => ({
         ...this.getCustomHeaders(),
-        'User-Agent': this.getCustomUserAgent(),
         ...(this.options.migratedFrom && { 'X-PostHog-Migrated-From': this.options.migratedFrom }),
       }),
       warn: (message) => this._logger.warn(message),
@@ -3073,7 +3072,7 @@ export abstract class PostHogBackendClient extends PostHogCoreStateless implemen
     body: string
   ): Promise<PostHogApiResponse> {
     try {
-      return await this.requestJson(url, { method: 'POST', headers, body }, { retryCount: 0 })
+      return await this.requestJson(url, { method: 'POST', headers, body })
     } catch (error) {
       this._events.emit('error', error)
       throw new Error(isTimeout(error) ? `Request timed out after ${this.requestTimeout}ms` : requestFailure(error))

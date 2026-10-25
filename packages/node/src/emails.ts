@@ -4,24 +4,22 @@ const TEMPLATE_SEND_PATH = (templateId: string): string =>
   `/api/projects/@current/messaging_templates/${templateId}/send/`
 const SEND_PATH = '/api/projects/@current/messaging/send/email/'
 
+interface SendForm {
+  name: 'templateId' | 'templateKey'
+  fields: ReadonlySet<string>
+}
+
 const TEMPLATE_KEY_PATTERN = /^[a-zA-Z0-9_-]{1,400}$/
-const CODE_ONLY_FIELDS = ['from', 'replyTo', 'subject', 'html', 'text'] as const
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,255}$/
-const SEND_OPTIONS = new Set([
-  'to',
-  'distinctId',
-  'idempotencyKey',
-  'captureEngagement',
-  'maxRetries',
-  'templateId',
-  'templateData',
-  'templateKey',
-  'from',
-  'replyTo',
-  'subject',
-  'html',
-  'text',
-])
+const SHARED_FIELDS = ['to', 'distinctId', 'idempotencyKey', 'captureEngagement', 'maxRetries']
+const TEMPLATE_FORM: SendForm = {
+  name: 'templateId',
+  fields: new Set([...SHARED_FIELDS, 'templateId', 'templateData']),
+}
+const CODE_FORM: SendForm = {
+  name: 'templateKey',
+  fields: new Set([...SHARED_FIELDS, 'templateKey', 'from', 'replyTo', 'subject', 'html', 'text']),
+}
 const DEFAULT_MAX_RETRIES = 2
 const FIRST_RETRY_DELAY_MS = 1_000
 const MAX_RETRY_DELAY_MS = 30_000
@@ -213,10 +211,18 @@ interface Attempt {
 export class PostHogEmails implements Emails {
   constructor(private readonly api: EmailsApi) {}
 
-  send(options: SendEmailOptions): Promise<SendEmailResult> {
+  send(options: SendEmailOptions, ...unexpected: unknown[]): Promise<SendEmailResult> {
     if (!isRecord(options)) {
       return Promise.resolve(
         failure('invalid_form', 'send needs an options object with to, and templateId or templateKey.')
+      )
+    }
+    if (unexpected.length > 0) {
+      return Promise.resolve(
+        failure(
+          'invalid_form',
+          'send takes one options object, so it sent nothing. Put idempotencyKey and every other option in it.'
+        )
       )
     }
     const refusal = this.refusalBeforeRequest(options)
@@ -246,7 +252,7 @@ export class PostHogEmails implements Emails {
           'goes to a proxy.'
       )
     }
-    return formRefusal(options) ?? unknownOptionRefusal(options) ?? idempotencyKeyRefusal(options.idempotencyKey)
+    return formRefusal(options) ?? idempotencyKeyRefusal(options.idempotencyKey)
   }
 
   private prepare(options: SendEmailOptions): PreparedSend {
@@ -302,7 +308,7 @@ function formRefusal(options: SendEmailOptions): Failure | undefined {
   }
   if (isTemplateForm(options)) {
     return isValidUUID(options.templateId)
-      ? codeOnlyFieldRefusal(options)
+      ? fieldRefusal(options, TEMPLATE_FORM, CODE_FORM)
       : failure('invalid_template_id', 'templateId must be the UUID of a template.', { field: 'templateId' })
   }
   if (typeof options.templateKey !== 'string' || !TEMPLATE_KEY_PATTERN.test(options.templateKey)) {
@@ -312,18 +318,21 @@ function formRefusal(options: SendEmailOptions): Failure | undefined {
       { field: 'templateKey' }
     )
   }
-  return contentRefusal(options)
+  return fieldRefusal(options, CODE_FORM, TEMPLATE_FORM) ?? contentRefusal(options)
 }
 
-function codeOnlyFieldRefusal(options: SendTemplateEmailOptions): Failure | undefined {
-  const field = CODE_ONLY_FIELDS.find((name) => options[name] !== undefined)
+function fieldRefusal(options: SendEmailOptions, form: SendForm, otherForm: SendForm): Failure | undefined {
+  const field = Object.entries(options).find(([name, value]) => value !== undefined && !form.fields.has(name))?.[0]
   if (field === undefined) {
     return undefined
   }
-  return failure('invalid_form', `Send ${field} with templateKey. A template made in PostHog sets its own.`, { field })
+  const fix = otherForm.fields.has(field) ? `Send ${field} with ${otherForm.name}.` : `Remove ${field} and send again.`
+  return failure('invalid_form', `A send with ${form.name} doesn't take ${field}, so it sent nothing. ${fix}`, {
+    field,
+  })
 }
 
-function contentRefusal({ subject, html, text, templateData }: SendCodeEmailOptions): Failure | undefined {
+function contentRefusal({ subject, html, text }: SendCodeEmailOptions): Failure | undefined {
   if (typeof subject !== 'string') {
     return failure('invalid_form', 'A send with templateKey needs a subject.', { field: 'subject' })
   }
@@ -335,14 +344,6 @@ function contentRefusal({ subject, html, text, templateData }: SendCodeEmailOpti
   }
   if (html === undefined && text === undefined) {
     return failure('invalid_form', 'A send with templateKey needs html, text or both.', { field: 'html' })
-  }
-  if (templateData !== undefined) {
-    return failure(
-      'invalid_form',
-      'A send with templateKey sends its content as is, so it takes no templateData. Fill in the values before you ' +
-        'send, or send a template made in PostHog with templateId.',
-      { field: 'templateData' }
-    )
   }
   return undefined
 }
@@ -415,16 +416,6 @@ function isRetryable({ error }: SendEmailResult): boolean {
     default:
       return false
   }
-}
-
-function unknownOptionRefusal(options: SendEmailOptions): Failure | undefined {
-  const field = Object.entries(options).find(([name, value]) => value !== undefined && !SEND_OPTIONS.has(name))?.[0]
-  if (field === undefined) {
-    return undefined
-  }
-  return failure('invalid_form', `send doesn't take ${field}, so it sent nothing. Remove ${field} and send again.`, {
-    field,
-  })
 }
 
 function isIdempotencyKey(value: unknown): boolean {

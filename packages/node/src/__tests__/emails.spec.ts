@@ -1,5 +1,5 @@
 import { PostHog, PostHogOptions } from '@/entrypoints/index.node'
-import type { SendEmailOptions } from '@/emails'
+import type { SendEmailOptions, SendEmailResult } from '@/emails'
 import { type Fault, FakeEmailsApi, refusalBody } from './utils/fake-emails-api'
 
 vi.mock('../version', () => ({ version: '1.2.3' }))
@@ -407,6 +407,16 @@ describe('emails', () => {
         data: null,
         error: expect.objectContaining({ name: 'validation_error', code: 'invalid_form' }),
       })
+      expect(api.received).toEqual([])
+    })
+
+    it("returns invalid_form for Resend's second options argument without a request", async () => {
+      const { emails } = createClient()
+      const send = emails.send.bind(emails) as (...args: unknown[]) => Promise<SendEmailResult>
+
+      const result = await send({ to: JANE, templateId: TEMPLATE_ID }, { idempotencyKey: 'welcome:user_42' })
+
+      expect(result.error).toEqual(expect.objectContaining({ name: 'validation_error', code: 'invalid_form' }))
       expect(api.received).toEqual([])
     })
 

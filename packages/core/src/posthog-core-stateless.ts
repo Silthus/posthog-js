@@ -1881,13 +1881,9 @@ export abstract class PostHogCoreStateless {
     return this._sendOtlpBatch({ path: 'traces', auth: 'bearer', payload })
   }
 
-  protected async requestJson(
-    url: string,
-    options: PostHogFetchOptions,
-    retryOptions?: Partial<RetriableOptions>
-  ): Promise<PostHogApiResponse> {
+  protected async requestJson(url: string, options: PostHogFetchOptions): Promise<PostHogApiResponse> {
     try {
-      return await this.fetchWithRetry(url, options, { type: 'required', consume: readApiResponse }, retryOptions)
+      return await this.fetchWithRetry(url, options, { type: 'required', consume: readApiResponse }, { retryCount: 0 })
     } catch (error) {
       if (error instanceof PostHogFetchHttpError) {
         return {
