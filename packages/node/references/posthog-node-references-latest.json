@@ -2053,6 +2053,11 @@
           "name": "subject"
         },
         {
+          "description": "Leave it out to send rendered content: the email goes out as is, and PostHog never stores it. Pass it to send a local template: PostHog fills its `{{ variables.* }}`, and the SDK uploads the template when PostHog does not hold its content yet.",
+          "type": "Record<string, unknown>",
+          "name": "templateData"
+        },
+        {
           "description": "Names the email, such as `'password-reset'`, so its metrics, logs and status group under it in PostHog.",
           "type": "string",
           "name": "templateKey"
@@ -4340,7 +4345,7 @@
       "name": "SendCodeEmailOptions",
       "properties": [],
       "path": "src/emails.ts",
-      "example": "SendEmailBase & CodeEmailForm & Without<TemplateEmailForm>"
+      "example": "SendEmailBase & CodeEmailForm & Without<Omit<TemplateEmailForm, 'templateData'>>"
     },
     {
       "id": "SendEmailBase",
@@ -4357,7 +4362,7 @@
           "name": "distinctId"
         },
         {
-          "description": "Sends with a key PostHog already accepted queue nothing and return the first send's `id`, even after the email's workflow was paused or the default sender changed. A deleted template, or a project that no longer has a default sender, still refuses the send. The same key with other options, such as another `captureEngagement` or `replyTo`, sends nothing and returns `invalid_idempotent_request`. Without it, the SDK makes a UUID v4 that covers its own retries. When a job runner retries the send, pass a key derived from what the email is for, such as `welcome:user_42`, and set `maxRetries: 0`.",
+          "description": "Sends with a key PostHog already accepted queue nothing and return the first send's `id`, even after the email's workflow was paused or the default sender changed. A deleted template, a local template whose content changed, or a project that no longer has a default sender while you name no `from`, still refuses the send. The same key with other options, such as another `captureEngagement` or `replyTo`, sends nothing and returns `invalid_idempotent_request`. Without it, the SDK makes a UUID v4 that covers its own retries. When a job runner retries the send, pass a key derived from what the email is for, such as `welcome:user_42`, and set `maxRetries: 0`.",
           "type": "string",
           "name": "idempotencyKey"
         },
@@ -4440,7 +4445,7 @@
           "name": "distinctId"
         },
         {
-          "description": "Sends with a key PostHog already accepted queue nothing and return the first send's `id`, even after the email's\nworkflow was paused or the default sender changed. A deleted template, or a project that no longer has a default\nsender, still refuses the send. The same key with other options, such as another `captureEngagement` or `replyTo`,\nsends nothing and returns `invalid_idempotent_request`. Without it, the SDK makes a UUID v4 that covers its own\nretries. When a job runner retries the send, pass a key derived from what the email is for, such as\n`welcome:user_42`, and set `maxRetries: 0`.",
+          "description": "Sends with a key PostHog already accepted queue nothing and return the first send's `id`, even after the email's\nworkflow was paused or the default sender changed. A deleted template, a local template whose content changed, or\na project that no longer has a default sender while you name no `from`, still refuses the send. The same key with\nother options, such as another `captureEngagement` or `replyTo`, sends nothing and returns\n`invalid_idempotent_request`. Without it, the SDK makes a UUID v4 that covers its own retries. When a job runner\nretries the send, pass a key derived from what the email is for, such as `welcome:user_42`, and set\n`maxRetries: 0`.",
           "type": "string",
           "name": "idempotencyKey"
         },
