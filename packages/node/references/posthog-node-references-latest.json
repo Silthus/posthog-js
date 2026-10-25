@@ -2206,7 +2206,7 @@
       "name": "EmailError",
       "properties": [
         {
-          "description": "PostHog's error code, such as `invalid_recipient`, or one of the SDK's own: `missing_secret_key`, `missing_app_host`, `client_disabled`, `client_closed`, `network_error`, `api_error` for an answer without a code, `unexpected_error`, and `invalid_form`, `invalid_template_id`, `invalid_template_key`, `invalid_attachment` and `invalid_idempotency_key` for a send the SDK refused before any request.",
+          "description": "PostHog's error code, such as `invalid_recipient`, or one of the SDK's own: `missing_secret_key`, `missing_app_host`, `client_disabled`, `client_closed`, `network_error`, `api_error` for an answer without a code, `unexpected_error`, `invalid_form`, `invalid_template_id`, `invalid_template_key`, `invalid_attachment` and `invalid_idempotency_key` for a send the SDK refused before any request, and `invalid_message_id` for a read.",
           "type": "string",
           "name": "code"
         },
@@ -2258,6 +2258,44 @@
       "id": "Emails",
       "name": "Emails",
       "properties": [],
+      "path": "src/emails.ts"
+    },
+    {
+      "id": "EmailStatus",
+      "name": "EmailStatus",
+      "properties": [],
+      "path": "src/emails.ts",
+      "example": "\"queued\" | \"waiting\" | \"unknown\" | \"skipped\" | \"failed\" | \"sent\" | \"delivered\" | \"bounced\" | \"complained\""
+    },
+    {
+      "id": "EmailStatusRecord",
+      "name": "EmailStatusRecord",
+      "properties": [
+        {
+          "description": "When PostHog queued the email, as an ISO 8601 timestamp.",
+          "type": "string",
+          "name": "createdAt"
+        },
+        {
+          "description": "The `id` that `posthog.emails.send()` returned.",
+          "type": "string",
+          "name": "id"
+        },
+        {
+          "description": "Why the email was skipped, failed or bounced, when PostHog knows.",
+          "type": "string",
+          "name": "reason"
+        },
+        {
+          "type": "EmailStatus",
+          "name": "status"
+        },
+        {
+          "description": "When the email reached its status, as an ISO 8601 timestamp.",
+          "type": "string",
+          "name": "statusAt"
+        }
+      ],
       "path": "src/emails.ts"
     },
     {
@@ -2788,6 +2826,13 @@
       "properties": [],
       "path": "src/types.ts",
       "example": "string | number | (string | number)[] | boolean"
+    },
+    {
+      "id": "GetEmailResult",
+      "name": "GetEmailResult",
+      "properties": [],
+      "path": "src/emails.ts",
+      "example": "{\n    data: EmailStatusRecord;\n    error: null;\n} | {\n    data: null;\n    error: EmailError;\n}"
     },
     {
       "id": "GetFlagsResult",
