@@ -645,7 +645,7 @@ describe('emails', () => {
       const { data, error } = await sendWelcome()
 
       expect(data).toBeNull()
-      expect(error).toMatchObject({ statusCode: 409 })
+      expect(error).toMatchObject({ statusCode: 409, name: 'validation_error' })
       expect(fetch).toHaveBeenCalledTimes(requestsMade)
     })
 
