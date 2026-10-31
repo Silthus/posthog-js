@@ -39,6 +39,15 @@ interface CodeEmailFields {
   /** A verified sender, such as `'Acme <security@example.com>'`. Without it, the project's default sender. */
   from?: string
   replyTo?: string | string[]
+  /** Bare addresses, such as `'finance@example.com'`, that get a copy. */
+  cc?: string | string[]
+  /** Bare addresses that get a copy the other recipients never see. */
+  bcc?: string | string[]
+  /** Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog sets the standard ones itself. */
+  headers?: Record<string, string>
+  /** Added to the email's engagement events as `$email_tags`. */
+  tags?: EmailTag[]
+  attachments?: EmailAttachment[]
   /**
    * Whether PostHog captures the email's engagement events (sent, delivered, opened, clicked,
    * bounced) as events of the recipient. Defaults to `true`. A project whose admin turned
@@ -52,6 +61,26 @@ interface CodeEmailFields {
    * the template whenever PostHog doesn't hold its content yet.
    */
   templateData?: Record<string, unknown>
+}
+
+/** A name and value that PostHog adds to the email's engagement events. ASCII letters, numbers, `_` and `-`. */
+export interface EmailTag {
+  name: string
+  value: string
+}
+
+/** A file sent with the email. */
+export interface EmailAttachment {
+  /** The name the recipient sees, such as `'invoice.pdf'`. */
+  filename: string
+  /** The file's bytes, or its content already Base64 encoded. */
+  content: Uint8Array | string
+  /** A MIME type, such as `'application/pdf'`. */
+  contentType?: string
+  /** Shows the file inline where the HTML has `<img src="cid:...">` with this id. */
+  contentId?: string
+  /** PostHog can't fetch a file from a path or URL: read the file and pass its `content`. */
+  path?: never
 }
 
 /**
