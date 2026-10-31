@@ -338,10 +338,10 @@ function prepareSend(options: SendEmailOptions, defaultMaxRetries: number): Prep
   if (typeof to !== 'string' || !to.trim()) {
     throw invalid('invalid_recipient', 'to must be one email address as a nonempty string.', 'to')
   }
-  const content = contentOf(send)
   if (distinctId !== undefined && (typeof distinctId !== 'string' || !distinctId)) {
     throw invalid('invalid_distinct_id', 'distinctId must be a nonempty string.', 'distinctId')
   }
+  const content = contentOf(send, distinctId)
   if (
     idempotencyKey !== undefined &&
     (typeof idempotencyKey !== 'string' || !IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey))
@@ -356,13 +356,9 @@ function prepareSend(options: SendEmailOptions, defaultMaxRetries: number): Prep
     throw invalid('invalid_max_retries', 'maxRetries must be a nonnegative integer.', 'maxRetries')
   }
 
-  const payload: Record<string, unknown> = { ...content, to }
-  if (distinctId !== undefined) {
-    payload.identifiers = { distinct_id: distinctId }
-  }
   return {
     path: SEND_PATH,
-    body: safeJsonStringify(payload),
+    body: safeJsonStringify({ ...content, to }),
     idempotencyKey: idempotencyKey ?? globalThis.crypto.randomUUID(),
     maxRetries: isRetryCount(maxRetries) ? maxRetries : defaultMaxRetries,
   }
@@ -372,17 +368,17 @@ function isRetryCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0
 }
 
-function contentOf(send: UncheckedSend): Record<string, unknown> {
+function contentOf(send: UncheckedSend, distinctId: string | undefined): Record<string, unknown> {
   if ((send.templateId === undefined) === (send.templateKey === undefined)) {
     throw new EmailError({
       code: 'invalid_form',
       message: 'Send either templateId, or templateKey with subject and html or text.',
     })
   }
-  return send.templateKey === undefined ? templateContent(send) : codeContent(send)
+  return send.templateKey === undefined ? templateContent(send, distinctId) : codeContent(send, distinctId)
 }
 
-function templateContent(send: UncheckedSend): Record<string, unknown> {
+function templateContent(send: UncheckedSend, distinctId: string | undefined): Record<string, unknown> {
   const { templateId, templateData } = send
   if (typeof templateId !== 'string' || !UUID_PATTERN.test(templateId)) {
     throw invalid('invalid_template_id', "templateId must be the template's UUID.", 'templateId')
@@ -394,10 +390,14 @@ function templateContent(send: UncheckedSend): Record<string, unknown> {
     throw invalid('invalid_template_data', 'templateData must be an object.', 'templateData')
   }
   refuseFieldsOutside(send, TEMPLATE_FORM, CODE_FORM)
-  return { template: { id: templateId.toLowerCase() }, message_data: templateData ?? {} }
+  return {
+    template: { id: templateId.toLowerCase() },
+    message_data: templateData ?? {},
+    ...(distinctId !== undefined && { identifiers: { distinct_id: distinctId } }),
+  }
 }
 
-function codeContent(send: UncheckedSend): Record<string, unknown> {
+function codeContent(send: UncheckedSend, distinctId: string | undefined): Record<string, unknown> {
   const { templateKey, subject, html, text, from, replyTo, captureEngagement } = send
   if (typeof templateKey !== 'string' || !TEMPLATE_KEY_PATTERN.test(templateKey)) {
     throw invalid(
@@ -427,6 +427,7 @@ function codeContent(send: UncheckedSend): Record<string, unknown> {
     ...(from !== undefined && { from }),
     ...(replyTo !== undefined && { reply_to: typeof replyTo === 'string' ? [replyTo] : replyTo }),
     capture_engagement: captureEngagement ?? true,
+    ...(distinctId !== undefined && { distinct_id: distinctId }),
   }
 }
 

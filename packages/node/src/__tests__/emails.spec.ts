@@ -182,7 +182,7 @@ describe('emails', () => {
     expect(JSON.parse(options.body)).toEqual({
       ...body,
       to: 'user@example.com',
-      identifiers: { distinct_id: 'user_123' },
+      distinct_id: 'user_123',
     })
   })
 
