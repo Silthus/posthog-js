@@ -101,12 +101,18 @@ export interface EmailSenderHooks {
   userAgent?: string
 }
 
-interface PreparedSend {
-  path: string
-  body: string
+interface PendingSend {
+  fields: Record<string, unknown>
+  localTemplate?: LocalTemplate
   idempotencyKey: string
   maxRetries: number
+}
+
+interface PreparedSend {
+  body: string
   upload?: TemplateUpload
+  idempotencyKey: string
+  maxRetries: number
 }
 
 interface TemplateUpload {
@@ -172,12 +178,12 @@ export class EmailSender implements Emails {
   private async sendUntracked(options: SendEmailOptions, unexpected: unknown[]): Promise<SendEmailResponse> {
     try {
       refuseSecondArgument(unexpected)
-      const prepared = await prepareSend(options, this.config.maxRetries)
+      const pending = prepareSend(options, this.config.maxRetries)
       const { appHost, secretKey } = this.connect(
         'no email was sent',
         'Sending email needs secretKey, a project secret API key with the hog_flow:write scope.'
       )
-      const result = await this.deliver(prepared, appHost, secretKey)
+      const result = await this.deliver(await completeSend(pending), appHost, secretKey)
       for (const warning of result.warnings) {
         this.hooks.logger.warn(`PostHog email warning ${warning.code}: ${warning.message}`)
       }
@@ -194,7 +200,7 @@ export class EmailSender implements Emails {
     })
     const post = (): Promise<SendEmailResult> =>
       this.withRetries(prepared.maxRetries, async () =>
-        parseSendReply(await this.request(appHost + prepared.path, 'POST', headers, prepared.body))
+        parseSendReply(await this.request(appHost + SEND_PATH, 'POST', headers, prepared.body))
       )
     try {
       return await post()
@@ -372,7 +378,7 @@ function refuseSecondArgument(unexpected: unknown[]): void {
   }
 }
 
-async function prepareSend(options: SendEmailOptions, defaultMaxRetries: number): Promise<PreparedSend> {
+function prepareSend(options: SendEmailOptions, defaultMaxRetries: number): PendingSend {
   const send: UncheckedSend = options ?? {}
   const { to, distinctId, idempotencyKey, maxRetries } = send
   if (typeof to !== 'string' || !to.trim()) {
@@ -396,16 +402,20 @@ async function prepareSend(options: SendEmailOptions, defaultMaxRetries: number)
     throw invalid('invalid_max_retries', 'maxRetries must be a nonnegative integer.', 'maxRetries')
   }
 
-  const prepared = {
-    path: SEND_PATH,
+  return {
+    fields: JSON.parse(safeJsonStringify({ ...fields, to })),
+    localTemplate,
     idempotencyKey: idempotencyKey ?? globalThis.crypto.randomUUID(),
     maxRetries: isRetryCount(maxRetries) ? maxRetries : defaultMaxRetries,
   }
+}
+
+async function completeSend({ fields, localTemplate, ...delivery }: PendingSend): Promise<PreparedSend> {
   if (!localTemplate) {
-    return { ...prepared, body: safeJsonStringify({ ...fields, to }) }
+    return { ...delivery, body: safeJsonStringify(fields) }
   }
   const template = { key: localTemplate.key, hash: await emailContentHash(localTemplate.content) }
-  return { ...prepared, body: safeJsonStringify({ template, ...fields, to }), upload: templateUpload(localTemplate) }
+  return { ...delivery, body: safeJsonStringify({ template, ...fields }), upload: templateUpload(localTemplate) }
 }
 
 function templateUpload({ key, content }: LocalTemplate): TemplateUpload {
@@ -498,7 +508,7 @@ function codeContent(send: UncheckedSend, distinctId: string | undefined): SendC
     }
   }
   return {
-    fields: { message_data: JSON.parse(safeJsonStringify(templateData)), ...identifiersOf(distinctId), ...sender },
+    fields: { message_data: templateData, ...identifiersOf(distinctId), ...sender },
     localTemplate: { key: templateKey, content },
   }
 }

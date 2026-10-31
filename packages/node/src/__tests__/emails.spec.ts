@@ -460,6 +460,21 @@ describe('emails', () => {
     expect(batchCallsDuringBackoff).toBe(1)
   })
 
+  it.each([
+    ['a template send', {}],
+    [
+      'a local template send',
+      { templateId: undefined, templateKey: 'welcome', subject: 'Hi', html: '<p>Hi</p>', templateData: {} },
+    ],
+  ])('sends %s that started before shutdown', async (_name, overrides) => {
+    replies = [accepted()]
+
+    const pending = send(overrides)
+    await posthog.shutdown()
+
+    expect((await pending).data?.id).toBe('msg_1')
+  })
+
   it('sends nothing after shutdown and returns client_closed', async () => {
     await posthog.shutdown()
 
@@ -660,20 +675,25 @@ describe('emails', () => {
 
     it('sends the recipient and data it was called with, even when the caller changes them afterwards', async () => {
       replies = [accepted(), accepted()]
-      const options = { to: 'jane@example.com', ...WELCOME, templateData: { name: 'Jane' } }
+      const options = {
+        to: 'jane@example.com',
+        ...WELCOME,
+        templateData: { name: 'Jane' },
+        replyTo: ['jane-help@example.com'],
+      }
 
       const toJane = posthog.emails.send(options)
       options.to = 'bob@example.com'
       options.templateData.name = 'Bob'
+      options.replyTo[0] = 'bob-help@example.com'
       const toBob = posthog.emails.send(options)
       await vi.runAllTimersAsync()
       await Promise.all([toJane, toBob])
 
-      expect(bodies().map((body) => (body as { to: string; message_data: unknown }).message_data)).toEqual([
-        { name: 'Jane' },
-        { name: 'Bob' },
+      expect(bodies()).toMatchObject([
+        { to: 'jane@example.com', message_data: { name: 'Jane' }, reply_to: ['jane-help@example.com'] },
+        { to: 'bob@example.com', message_data: { name: 'Bob' }, reply_to: ['bob-help@example.com'] },
       ])
-      expect(bodies().map((body) => (body as { to: string }).to)).toEqual(['jane@example.com', 'bob@example.com'])
     })
 
     it.each([['template data that is not an object', { templateData: ['Jane'] }, 'invalid_template_data']])(
