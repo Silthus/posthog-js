@@ -8,9 +8,11 @@ export { EmailError } from './emails/errors'
 export type { EmailErrorName } from './emails/errors'
 export type {
   CodeEmailForm,
+  EmailAttachment,
   EmailDeliveryStatus,
   Emails,
   EmailStatus,
+  EmailTag,
   EmailWarning,
   GetEmailResponse,
   SendCodeEmailOptions,

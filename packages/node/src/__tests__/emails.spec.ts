@@ -22,6 +22,32 @@ const rejected = (status: number, code?: string, headers: Record<string, string>
   headers,
 })
 
+const REPORT = Buffer.alloc(40_000, 'report')
+const EXTRAS = {
+  cc: 'finance@example.com',
+  bcc: ['audit@example.com', 'archive@example.com'],
+  headers: { 'X-Entity-Ref-ID': 'order-123' },
+  tags: [{ name: 'category', value: 'receipt' }],
+  attachments: [
+    { filename: 'receipt.txt', content: Buffer.from('hello') },
+    { filename: 'logo.png', content: new Uint8Array([0, 255, 1]), contentType: 'image/png', contentId: 'logo' },
+    { filename: 'invite.ics', content: 'QkVHSU46VkNBTEVOREFS', contentType: 'text/calendar' },
+    { filename: 'report.txt', content: REPORT },
+  ],
+}
+const EXTRAS_ON_THE_WIRE = {
+  cc: ['finance@example.com'],
+  bcc: ['audit@example.com', 'archive@example.com'],
+  headers: { 'X-Entity-Ref-ID': 'order-123' },
+  tags: [{ name: 'category', value: 'receipt' }],
+  attachments: [
+    { filename: 'receipt.txt', content: 'aGVsbG8=' },
+    { filename: 'logo.png', content: 'AP8B', content_type: 'image/png', content_id: 'logo' },
+    { filename: 'invite.ics', content: 'QkVHSU46VkNBTEVOREFS', content_type: 'text/calendar' },
+    { filename: 'report.txt', content: REPORT.toString('base64') },
+  ],
+}
+
 describe('emails', () => {
   vi.useFakeTimers()
 
@@ -167,6 +193,17 @@ describe('emails', () => {
         html: '<p>Reset</p>',
         text: 'Reset',
         reply_to: ['a@example.com', 'b@example.com'],
+        capture_engagement: true,
+      },
+    ],
+    [
+      'copies, headers, tags and attachments',
+      { templateKey: 'receipt', subject: 'Your receipt', html: '<p>Thanks</p>', ...EXTRAS },
+      {
+        template_key: 'receipt',
+        subject: 'Your receipt',
+        html: '<p>Thanks</p>',
+        ...EXTRAS_ON_THE_WIRE,
         capture_engagement: true,
       },
     ],
@@ -522,6 +559,15 @@ describe('emails', () => {
         { templateId: TEMPLATE_ID, captureEngagement: false },
         'captureEngagement',
       ],
+      ['cc on the template form', { templateId: TEMPLATE_ID, cc: 'finance@example.com' }, 'cc'],
+      ['bcc on the template form', { templateId: TEMPLATE_ID, bcc: ['audit@example.com'] }, 'bcc'],
+      ['headers on the template form', { templateId: TEMPLATE_ID, headers: { 'X-Entity-Ref-ID': '42' } }, 'headers'],
+      ['tags on the template form', { templateId: TEMPLATE_ID, tags: [{ name: 'kind', value: 'invoice' }] }, 'tags'],
+      [
+        'attachments on the template form',
+        { templateId: TEMPLATE_ID, attachments: [{ filename: 'a.txt', content: 'YQ==' }] },
+        'attachments',
+      ],
       ['a code send without a subject', { templateKey: 'welcome', html: '<p>Hi</p>' }, 'subject'],
       ['a code send without html or text', { templateKey: 'welcome', subject: 'Hi' }, 'html'],
       ['a code send with html that is not a string', { ...CODE_SEND, html: 1 }, 'html'],
@@ -536,6 +582,24 @@ describe('emails', () => {
 
       expect(data).toBeNull()
       expect(error).toMatchObject({ code: 'invalid_form', name: 'validation_error', field })
+      expect(fetch).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['attachments that are not a list', { filename: 'a.txt', content: 'YQ==' }, 'attachments'],
+      ['an attachment without content', [{ filename: 'a.txt', content: 42 }], 'attachments__0__content'],
+      [
+        "a Resend attachment path, which PostHog can't fetch",
+        [
+          { filename: 'terms.txt', content: 'dGVybXM=' },
+          { filename: 'a.pdf', path: 'https://example.com/a.pdf' },
+        ],
+        'attachments__1__path',
+      ],
+    ])('refuses %s before sending', async (_name, attachments, field) => {
+      const { error } = await sendForm({ ...CODE_SEND, attachments })
+
+      expect(error).toMatchObject({ code: 'invalid_attachment', name: 'validation_error', field })
       expect(fetch).not.toHaveBeenCalled()
     })
 
@@ -662,6 +726,23 @@ describe('emails', () => {
       expect(data).toBeNull()
       expect(error).toMatchObject({ statusCode: 409, name: 'validation_error' })
       expect(fetch).toHaveBeenCalledTimes(requestsMade)
+    })
+
+    it('sends copies, headers, tags and attachments with both sends, and never uploads them', async () => {
+      replies = [rejected(409, 'template_outdated'), uploaded(), accepted()]
+
+      await sendWelcome(EXTRAS)
+
+      const [firstSend, upload, secondSend] = bodies()
+      expect(firstSend).toMatchObject(EXTRAS_ON_THE_WIRE)
+      expect(secondSend).toEqual(firstSend)
+      expect(Object.keys(upload as object).sort()).toEqual([
+        'html',
+        'if_code_managed',
+        'if_not_superseded',
+        'name',
+        'subject',
+      ])
     })
 
     it('never uploads content rendered for one recipient', async () => {

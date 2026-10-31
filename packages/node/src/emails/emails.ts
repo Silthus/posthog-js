@@ -11,6 +11,7 @@ import { type EmailContent, emailContentHash } from './content-hash'
 import { EmailError } from './errors'
 import type {
   CodeEmailForm,
+  EmailAttachment,
   EmailStatus,
   EmailWarning,
   Emails,
@@ -36,6 +37,7 @@ const CLOUD_APP_HOSTS: Record<string, string> = {
   'https://eu.posthog.com': EU_APP_HOST,
 }
 const MAX_RETRY_DELAY_MS = 30_000
+const BASE64_CHUNK_BYTES = 0x8000
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const IDEMPOTENCY_KEY_PATTERN = /^[\x21-\x7e]{1,255}$/
 const TEMPLATE_KEY_PATTERN = /^[a-zA-Z0-9_-]{1,400}$/
@@ -64,6 +66,11 @@ const CODE_FIELDS: EveryField<CodeEmailForm> = {
   replyTo: true,
   captureEngagement: true,
   templateData: true,
+  cc: true,
+  bcc: true,
+  headers: true,
+  tags: true,
+  attachments: true,
   html: true,
   text: true,
 }
@@ -469,7 +476,7 @@ function identifiersOf(distinctId: string | undefined): Record<string, unknown> 
 }
 
 function codeContent(send: UncheckedSend, distinctId: string | undefined): SendContent {
-  const { templateKey, subject, html, text, from, replyTo, captureEngagement, templateData } = send
+  const { templateKey, subject, html, text, templateData } = send
   if (typeof templateKey !== 'string' || !TEMPLATE_KEY_PATTERN.test(templateKey)) {
     throw invalid(
       'invalid_template_key',
@@ -491,12 +498,9 @@ function codeContent(send: UncheckedSend, distinctId: string | undefined): SendC
     throw invalid('invalid_form', 'A send with templateKey needs html, text or both.', 'html')
   }
   refuseNonObjectTemplateData(templateData)
+  refuseUnsendableAttachments(send.attachments)
   const content = { subject, ...(html !== undefined && { html }), ...(text !== undefined && { text }) }
-  const sender = {
-    ...(from !== undefined && { from }),
-    ...(replyTo !== undefined && { reply_to: typeof replyTo === 'string' ? [replyTo] : replyTo }),
-    capture_engagement: captureEngagement ?? true,
-  }
+  const sender = codeFormFields(send)
   if (templateData === undefined) {
     return {
       fields: {
@@ -511,6 +515,68 @@ function codeContent(send: UncheckedSend, distinctId: string | undefined): SendC
     fields: { message_data: templateData, ...identifiersOf(distinctId), ...sender },
     localTemplate: { key: templateKey, content },
   }
+}
+
+function codeFormFields(send: UncheckedSend): Record<string, unknown> {
+  const { from, replyTo, cc, bcc, headers, tags, attachments, captureEngagement } = send
+  return {
+    ...(from !== undefined && { from }),
+    ...(replyTo !== undefined && { reply_to: addressList(replyTo) }),
+    ...(cc !== undefined && { cc: addressList(cc) }),
+    ...(bcc !== undefined && { bcc: addressList(bcc) }),
+    ...(headers !== undefined && { headers }),
+    ...(tags !== undefined && { tags }),
+    ...(attachments !== undefined && { attachments: (attachments as EmailAttachment[]).map(attachmentFields) }),
+    capture_engagement: captureEngagement ?? true,
+  }
+}
+
+function addressList(addresses: unknown): unknown {
+  return typeof addresses === 'string' ? [addresses] : addresses
+}
+
+function refuseUnsendableAttachments(attachments: unknown): void {
+  if (attachments === undefined) {
+    return
+  }
+  if (!Array.isArray(attachments)) {
+    throw invalid('invalid_attachment', 'attachments must be a list of files.', 'attachments')
+  }
+  attachments.forEach(refuseUnsendableAttachment)
+}
+
+function refuseUnsendableAttachment(attachment: Partial<Record<keyof EmailAttachment, unknown>>, index: number): void {
+  if (attachment?.path !== undefined) {
+    throw invalid(
+      'invalid_attachment',
+      "PostHog can't fetch an attachment from a path or URL. Read the file and pass its content instead.",
+      `attachments__${index}__path`
+    )
+  }
+  if (typeof attachment?.content !== 'string' && !(attachment?.content instanceof Uint8Array)) {
+    throw invalid(
+      'invalid_attachment',
+      'An attachment needs content: a Buffer, a Uint8Array or a Base64 string.',
+      `attachments__${index}__content`
+    )
+  }
+}
+
+function attachmentFields({ filename, content, contentType, contentId }: EmailAttachment): Record<string, string> {
+  return {
+    filename,
+    content: typeof content === 'string' ? content : base64Of(content),
+    ...(contentType !== undefined && { content_type: contentType }),
+    ...(contentId !== undefined && { content_id: contentId }),
+  }
+}
+
+function base64Of(bytes: Uint8Array): string {
+  const chunks: string[] = []
+  for (let start = 0; start < bytes.length; start += BASE64_CHUNK_BYTES) {
+    chunks.push(String.fromCharCode(...bytes.subarray(start, start + BASE64_CHUNK_BYTES)))
+  }
+  return btoa(chunks.join(''))
 }
 
 function refuseFieldsOutside(send: UncheckedSend, form: SendForm, otherForm: SendForm): void {
