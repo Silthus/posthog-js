@@ -588,6 +588,8 @@ describe('emails', () => {
     it.each([
       ['attachments that are not a list', { filename: 'a.txt', content: 'YQ==' }, 'attachments'],
       ['an attachment without content', [{ filename: 'a.txt' }], 'attachments__0__content'],
+      ["a file's bytes in place of an attachment", [Buffer.from('%PDF')], 'attachments__0'],
+      ['a Base64 string in place of an attachment', ['JVBERi0='], 'attachments__0'],
       ['an attachment whose content is a number', [{ filename: 'a.txt', content: 42 }], 'attachments__0__content'],
       [
         'an attachment with a key it does not take',

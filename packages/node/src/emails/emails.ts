@@ -540,11 +540,24 @@ function attachmentsOf(attachments: unknown): Record<string, unknown>[] {
   return attachments.map(attachmentOf)
 }
 
-function attachmentOf(
-  attachment: Partial<Record<keyof EmailAttachment, unknown>>,
-  index: number
-): Record<string, unknown> {
-  const { filename, content, contentType, contentId, path, ...rest } = attachment ?? {}
+const ATTACHMENT_KEYS = new Set(['filename', 'content', 'contentType', 'contentId', 'path'])
+
+function attachmentOf(attachment: unknown, index: number): Record<string, unknown> {
+  if (
+    typeof attachment !== 'object' ||
+    attachment === null ||
+    Array.isArray(attachment) ||
+    ArrayBuffer.isView(attachment)
+  ) {
+    throw invalid(
+      'invalid_attachment',
+      "An attachment is an object with filename and content. Pass the file's bytes as its content.",
+      `attachments__${index}`
+    )
+  }
+  const { filename, content, contentType, contentId, path } = attachment as Partial<
+    Record<keyof EmailAttachment, unknown>
+  >
   if (path !== undefined) {
     throw invalid(
       'invalid_attachment',
@@ -552,7 +565,9 @@ function attachmentOf(
       `attachments__${index}__path`
     )
   }
-  const unknownKey = Object.entries(rest).find(([, value]) => value !== undefined)?.[0]
+  const unknownKey = Object.entries(attachment).find(
+    ([key, value]) => !ATTACHMENT_KEYS.has(key) && value !== undefined
+  )?.[0]
   if (unknownKey !== undefined) {
     throw invalid(
       'invalid_attachment',
