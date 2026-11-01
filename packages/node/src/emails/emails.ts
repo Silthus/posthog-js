@@ -110,14 +110,9 @@ interface PendingSend {
 
 interface PreparedSend {
   body: string
-  upload?: TemplateUpload
+  localTemplate?: LocalTemplate
   idempotencyKey: string
   maxRetries: number
-}
-
-interface TemplateUpload {
-  path: string
-  body: string
 }
 
 interface SendContent {
@@ -205,19 +200,24 @@ export class EmailSender implements Emails {
     try {
       return await post()
     } catch (error) {
-      if (!prepared.upload || !isOutdatedTemplate(error)) {
+      if (!prepared.localTemplate || !isOutdatedTemplate(error)) {
         throw error
       }
-      await this.upload(prepared.upload, appHost, secretKey, prepared.maxRetries)
+      await this.upload(prepared.localTemplate, appHost, secretKey, prepared.maxRetries)
       return await post()
     }
   }
 
-  private async upload(upload: TemplateUpload, appHost: string, secretKey: string, maxRetries: number): Promise<void> {
+  private async upload(
+    { key, content }: LocalTemplate,
+    appHost: string,
+    secretKey: string,
+    maxRetries: number
+  ): Promise<void> {
+    const url = appHost + TEMPLATE_UPLOAD_PATH.replace('{templateKey}', key)
     const headers = this.headers(secretKey, { 'Content-Type': 'application/json' })
-    await this.withRetries(maxRetries, async () =>
-      parseUploadReply(await this.request(appHost + upload.path, 'PUT', headers, upload.body))
-    )
+    const body = safeJsonStringify({ name: key, ...content, if_code_managed: true, if_not_superseded: true })
+    await this.withRetries(maxRetries, async () => parseUploadReply(await this.request(url, 'PUT', headers, body)))
   }
 
   private async getUntracked(id: string): Promise<GetEmailResponse> {
@@ -415,14 +415,7 @@ async function completeSend({ fields, localTemplate, ...delivery }: PendingSend)
     return { ...delivery, body: safeJsonStringify(fields) }
   }
   const template = { key: localTemplate.key, hash: await emailContentHash(localTemplate.content) }
-  return { ...delivery, body: safeJsonStringify({ template, ...fields }), upload: templateUpload(localTemplate) }
-}
-
-function templateUpload({ key, content }: LocalTemplate): TemplateUpload {
-  return {
-    path: TEMPLATE_UPLOAD_PATH.replace('{templateKey}', key),
-    body: safeJsonStringify({ name: key, ...content, if_code_managed: true, if_not_superseded: true }),
-  }
+  return { ...delivery, body: safeJsonStringify({ template, ...fields }), localTemplate }
 }
 
 function isRetryCount(value: unknown): value is number {
