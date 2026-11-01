@@ -21,4 +21,6 @@ export const wrongCombinations: SendEmailOptions[] = [
   { to, templateKey: 'reset', subject: 'Reset' },
   // @ts-expect-error the code form needs a subject
   { to, templateKey: 'reset', html: '<p>Reset</p>' },
+  // @ts-expect-error a local template needs html
+  { to, templateKey: 'welcome', subject: 'Hi {{ variables.name }}', text: 'Hi', templateData: { name: 'J' } },
 ]

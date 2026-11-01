@@ -690,21 +690,35 @@ describe('emails', () => {
       await vi.runAllTimersAsync()
       await Promise.all([toJane, toBob])
 
-      expect(bodies()).toMatchObject([
-        { to: 'jane@example.com', message_data: { name: 'Jane' }, reply_to: ['jane-help@example.com'] },
-        { to: 'bob@example.com', message_data: { name: 'Bob' }, reply_to: ['bob-help@example.com'] },
-      ])
+      // The two hashes may finish in either order, so the requests may too.
+      expect(bodies()).toHaveLength(2)
+      expect(bodies()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            to: 'jane@example.com',
+            message_data: { name: 'Jane' },
+            reply_to: ['jane-help@example.com'],
+          }),
+          expect.objectContaining({
+            to: 'bob@example.com',
+            message_data: { name: 'Bob' },
+            reply_to: ['bob-help@example.com'],
+          }),
+        ])
+      )
     })
 
-    it.each([['template data that is not an object', { templateData: ['Jane'] }, 'invalid_template_data']])(
-      'refuses %s before sending',
-      async (_name, overrides, code) => {
-        const { error } = await sendWelcome(overrides)
+    it.each([
+      ['template data that is not an object', { templateData: ['Jane'] }, 'invalid_template_data', 'templateData'],
+      ['a local template without html', { html: undefined, text: 'Hi {{ variables.name }}' }, 'invalid_form', 'html'],
+      ['a local template with empty html', { html: '' }, 'invalid_form', 'html'],
+      ['a local template with an empty subject', { subject: '' }, 'invalid_form', 'subject'],
+    ])('refuses %s before sending', async (_name, overrides, code, field) => {
+      const { error } = await sendWelcome(overrides)
 
-        expect(error).toMatchObject({ code, name: 'validation_error' })
-        expect(fetch).not.toHaveBeenCalled()
-      }
-    )
+      expect(error).toMatchObject({ code, name: 'validation_error', field })
+      expect(fetch).not.toHaveBeenCalled()
+    })
   })
 
   describe('get', () => {
