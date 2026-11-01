@@ -22,26 +22,16 @@ export async function emailContentHash(content: EmailContent): Promise<string> {
 
 function encode(content: EmailContent): Uint8Array<ArrayBuffer> {
   const encoder = new TextEncoder()
-  const chunks: Uint8Array[] = [encoder.encode(ENCODING_HEADER)]
+  let encoded = ENCODING_HEADER
   for (const part of HASHED_PARTS) {
-    const bytes = encoder.encode(normalizeLineEndings(content[part] ?? ''))
-    chunks.push(encoder.encode(`${bytes.length}:`), bytes, encoder.encode('\n'))
+    const value = normalizeLineEndings(content[part] ?? '')
+    encoded += `${encoder.encode(value).length}:${value}\n`
   }
-  return concat(chunks)
+  return encoder.encode(encoded)
 }
 
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n')
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
-  const joined = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0))
-  let offset = 0
-  for (const chunk of chunks) {
-    joined.set(chunk, offset)
-    offset += chunk.length
-  }
-  return joined
 }
 
 function toHex(bytes: Uint8Array): string {

@@ -58,7 +58,9 @@ interface CodeEmailFields {
   /**
    * Leave it out to send rendered content: the email goes out as is, and PostHog never stores it.
    * Pass it to send a local template: PostHog fills its `{{ variables.* }}`, and the SDK uploads
-   * the template whenever PostHog doesn't hold its content yet.
+   * the template whenever PostHog doesn't hold its content yet. A local template needs `html`.
+   * Content that PostHog already replaced with newer content isn't uploaded again: the email goes
+   * out with the newer content, and the send returns a `template_superseded` warning.
    */
   templateData?: Record<string, unknown>
 }
@@ -86,9 +88,10 @@ export interface EmailAttachment {
 /**
  * Email content from your code, named by a key: content your code rendered, such as React Email
  * output, or a local template that PostHog fills in with `templateData`. Needs `html`, `text` or
- * both. PostHog derives a missing `text` from the `html`.
+ * both, and a local template needs `html`. PostHog derives a missing `text` from the `html`.
  */
-export type CodeEmailForm = CodeEmailFields & ({ html: string; text?: string } | { html?: string; text: string })
+export type CodeEmailForm = CodeEmailFields &
+  ({ html: string; text?: string } | { html?: string; text: string; templateData?: never })
 
 type Without<T> = { [K in keyof T]?: never }
 

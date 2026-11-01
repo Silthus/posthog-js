@@ -48,4 +48,6 @@ export const wrongCombinations: SendEmailOptions[] = [
     // @ts-expect-error PostHog can't fetch an attachment from a path
     attachments: [{ filename: 'a.pdf', path: '/a.pdf' }],
   },
+  // @ts-expect-error a local template needs html
+  { to, templateKey: 'welcome', subject: 'Hi {{ variables.name }}', text: 'Hi', templateData: { name: 'J' } },
 ]
