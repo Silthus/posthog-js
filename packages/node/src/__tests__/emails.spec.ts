@@ -690,7 +690,6 @@ describe('emails', () => {
       await vi.runAllTimersAsync()
       await Promise.all([toJane, toBob])
 
-      // The two hashes may finish in either order, so the requests may too.
       expect(bodies()).toHaveLength(2)
       expect(bodies()).toEqual(
         expect.arrayContaining([

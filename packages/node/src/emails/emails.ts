@@ -500,7 +500,6 @@ function codeContent(send: UncheckedSend, distinctId: string | undefined): SendC
       },
     }
   }
-  // PostHog stores a local template, and a stored template needs a subject and HTML.
   if (!subject) {
     throw invalid('invalid_form', 'A local template needs a subject that is not empty.', 'subject')
   }
