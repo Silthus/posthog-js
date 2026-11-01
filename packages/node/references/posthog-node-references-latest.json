@@ -2064,7 +2064,7 @@
           "name": "from"
         },
         {
-          "description": "Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog sets the standard ones itself.",
+          "description": "Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog refuses a header it sets itself, such as `From`, `Subject` or `Content-Type`: use the send's own fields instead.",
           "type": "Record<string, string>",
           "name": "headers"
         },
@@ -4622,7 +4622,7 @@
           "name": "bcc"
         },
         {
-          "description": "Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog sets the standard ones itself.",
+          "description": "Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog refuses a header it\nsets itself, such as `From`, `Subject` or `Content-Type`: use the send's own fields instead.",
           "type": "never",
           "name": "headers"
         },

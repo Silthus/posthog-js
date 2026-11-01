@@ -491,7 +491,6 @@ function codeContent(send: UncheckedSend, distinctId: string | undefined): SendC
     throw invalid('invalid_form', 'A send with templateKey needs html, text or both.', 'html')
   }
   refuseNonObjectTemplateData(templateData)
-  refuseUnsendableAttachments(send.attachments)
   const content = { subject, ...(html !== undefined && { html }), ...(text !== undefined && { text }) }
   const sender = codeFormFields(send)
   if (templateData === undefined) {
@@ -526,7 +525,7 @@ function codeFormFields(send: UncheckedSend): Record<string, unknown> {
     ...(bcc !== undefined && { bcc: addressList(bcc) }),
     ...(headers !== undefined && { headers }),
     ...(tags !== undefined && { tags }),
-    ...(attachments !== undefined && { attachments: (attachments as EmailAttachment[]).map(attachmentFields) }),
+    ...(attachments !== undefined && { attachments: attachmentsOf(attachments) }),
     capture_engagement: captureEngagement ?? true,
   }
 }
@@ -535,34 +534,40 @@ function addressList(addresses: unknown): unknown {
   return typeof addresses === 'string' ? [addresses] : addresses
 }
 
-function refuseUnsendableAttachments(attachments: unknown): void {
-  if (attachments === undefined) {
-    return
-  }
+function attachmentsOf(attachments: unknown): Record<string, unknown>[] {
   if (!Array.isArray(attachments)) {
     throw invalid('invalid_attachment', 'attachments must be a list of files.', 'attachments')
   }
-  attachments.forEach(refuseUnsendableAttachment)
+  return attachments.map(attachmentOf)
 }
 
-function refuseUnsendableAttachment(attachment: Partial<Record<keyof EmailAttachment, unknown>>, index: number): void {
-  if (attachment?.path !== undefined) {
+function attachmentOf(
+  attachment: Partial<Record<keyof EmailAttachment, unknown>>,
+  index: number
+): Record<string, unknown> {
+  const { filename, content, contentType, contentId, path, ...rest } = attachment ?? {}
+  if (path !== undefined) {
     throw invalid(
       'invalid_attachment',
       "PostHog can't fetch an attachment from a path or URL. Read the file and pass its content instead.",
       `attachments__${index}__path`
     )
   }
-  if (typeof attachment?.content !== 'string' && !(attachment?.content instanceof Uint8Array)) {
+  const unknownKey = Object.entries(rest).find(([, value]) => value !== undefined)?.[0]
+  if (unknownKey !== undefined) {
+    throw invalid(
+      'invalid_attachment',
+      `An attachment takes filename, content, contentType and contentId, not ${unknownKey}.`,
+      `attachments__${index}__${unknownKey}`
+    )
+  }
+  if (typeof content !== 'string' && !(content instanceof Uint8Array)) {
     throw invalid(
       'invalid_attachment',
       'An attachment needs content: a Buffer, a Uint8Array or a Base64 string.',
       `attachments__${index}__content`
     )
   }
-}
-
-function attachmentFields({ filename, content, contentType, contentId }: EmailAttachment): Record<string, string> {
   return {
     filename,
     content: typeof content === 'string' ? content : base64Of(content),

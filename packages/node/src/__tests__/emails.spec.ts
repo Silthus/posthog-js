@@ -587,7 +587,13 @@ describe('emails', () => {
 
     it.each([
       ['attachments that are not a list', { filename: 'a.txt', content: 'YQ==' }, 'attachments'],
-      ['an attachment without content', [{ filename: 'a.txt', content: 42 }], 'attachments__0__content'],
+      ['an attachment without content', [{ filename: 'a.txt' }], 'attachments__0__content'],
+      ['an attachment whose content is a number', [{ filename: 'a.txt', content: 42 }], 'attachments__0__content'],
+      [
+        'an attachment with a key it does not take',
+        [{ filename: 'logo.png', content: 'AA==', content_id: 'logo' }],
+        'attachments__0__content_id',
+      ],
       [
         "a Resend attachment path, which PostHog can't fetch",
         [

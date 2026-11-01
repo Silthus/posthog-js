@@ -43,7 +43,10 @@ interface CodeEmailFields {
   cc?: string | string[]
   /** Bare addresses that get a copy the other recipients never see. */
   bcc?: string | string[]
-  /** Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog sets the standard ones itself. */
+  /**
+   * Custom email headers, such as `{ 'X-Entity-Ref-ID': 'order-123' }`. PostHog refuses a header it
+   * sets itself, such as `From`, `Subject` or `Content-Type`: use the send's own fields instead.
+   */
   headers?: Record<string, string>
   /** Added to the email's engagement events as `$email_tags`. */
   tags?: EmailTag[]
